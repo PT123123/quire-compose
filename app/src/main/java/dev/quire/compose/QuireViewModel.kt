@@ -11,6 +11,10 @@ import dev.quire.compose.bridge.Native
 import dev.quire.compose.bridge.OrgCatalog
 import dev.quire.compose.bridge.Reply
 import dev.quire.compose.bridge.View
+import dev.quire.compose.ui.MarkdownText
+import dev.quire.compose.ui.ORG_TAB_NOTES
+import dev.quire.compose.ui.ORG_TAB_TASKS
+import dev.quire.compose.ui.OrgModel
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -155,21 +159,34 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── SPEC §四十一: the organizer's own view state ───────────────────────
     //
-    // Which tab, which smart view, which list, which sort, the needle and the two
-    // selections. All of it is a fact about *the window and the finger*, not about
-    // a document — which is why it lives here and not in the library: the desktop
-    // keeps it in its `UIState` for the same reason (ADR-0073's rule). Filtering
-    // and sorting are then a pure function of this state and the catalog the last
-    // reply carried, so a chip press or a keystroke in the search box redraws
-    // without a round trip to the backend.
+    // Which destination, which smart view, which list, which sort, the needle, the
+    // two selections, and what the capture sheet is for. All of it is a fact about
+    // *the window and the finger*, not about a document — which is why it lives
+    // here and not in the library: the desktop keeps it in its `UIState` for the
+    // same reason (ADR-0073's rule). Filtering and sorting are then a pure function
+    // of this state and the catalog the last reply carried, so a chip press or a
+    // keystroke in the search box redraws without a round trip to the backend.
     //
     // It lives on the ViewModel rather than in a `remember` so it survives a
     // rotation: landing back on 今天 with the needle still typed is what a user
     // expects, and a filter that resets itself on a turn of the tablet is a bug
-    // nobody would call one.
+    // nobody would call one. The **draft** is here for the same reason — a capture
+    // sheet swiped away mid-sentence must not eat the sentence.
 
-    /** 0 笔记 · 1 任务. The Slint shell's slots, kept so both shells say 笔记 first. */
-    var orgTab by mutableStateOf(0)
+    /**
+     * What the floating capture sheet is for. `Closed` is not "no sheet yet" so
+     * much as "the sheet is not on screen", which is what makes one piece of state
+     * decide the sheet's title, its placeholder, its line count and what ➤ commits.
+     */
+    sealed interface Compose {
+        data object Closed : Compose
+        data object NewNote : Compose
+        data object NewTask : Compose
+        data class EditNote(val id: Long) : Compose
+    }
+
+    /** 0 笔记（收件箱）· 1 任务. Two destinations, as the drawer lists them. */
+    var orgTab by mutableStateOf(ORG_TAB_NOTES)
         private set
 
     /** Smart view slot: 0 收集箱 · 1 今天 · 2 近七天 · 3 全部 · 4 已完成. */
@@ -180,16 +197,23 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     var orgList by mutableStateOf(-1L)
         private set
 
-    /** 0 添加顺序 · 1 优先级 · 2 截止日期. */
-    var orgSort by mutableStateOf(0)
-        private set
-
     /** 0 列表 · 1 平铺（看板）. */
     var orgMode by mutableStateOf(0)
         private set
 
-    /** One needle per tab, and only the tab that is showing reads it. */
+    /** 0 最新创建 · 1 最新更新 · 2 按内容. */
+    var orgNoteSort by mutableStateOf(0)
+        private set
+
+    /** 0 默认排序 · 1 最近添加 · 2 反向 · 3 按优先级 · 4 按截止日期. */
+    var orgTaskSort by mutableStateOf(0)
+        private set
+
+    /** The needle, and whether the bar's 🔍 has revealed the field that holds it. */
     var orgQuery by mutableStateOf("")
+        private set
+
+    var orgSearchOpen by mutableStateOf(false)
         private set
 
     /** Whether the list shows the finished rows the views hide. */
@@ -200,12 +224,22 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     var orgTag by mutableStateOf("")
         private set
 
-    /** The open note, or `-1` for the list. */
-    var orgNoteSel by mutableStateOf(-1L)
-        private set
-
     /** The open task, or `-1` for the list. */
     var orgTaskSel by mutableStateOf(-1L)
+        private set
+
+    /** The capture sheet's state, and the text in it. */
+    var orgCompose by mutableStateOf<Compose>(Compose.Closed)
+        private set
+
+    var orgDraft by mutableStateOf("")
+        private set
+
+    /** The note or task whose ⋯ menu is open. */
+    var orgNoteMenu by mutableStateOf<Long?>(null)
+        private set
+
+    var orgTaskMenu by mutableStateOf<Long?>(null)
         private set
 
     /**
@@ -224,13 +258,21 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgFocus = null
     }
 
-    /** Go to the area, on one tab, with nothing selected. */
-    fun openOrganizer(tab: Int) {
-        orgTab = tab.coerceIn(0, 1)
+    /** Go to 收件箱, with nothing selected and nothing filtered. */
+    fun openNotes() = openDestination(ORG_TAB_NOTES)
+
+    /** Go to 任务, on the same terms. */
+    fun openTasks() = openDestination(ORG_TAB_TASKS)
+
+    private fun openDestination(tab: Int) {
+        orgTab = tab
         orgList = -1
         orgTag = ""
         orgQuery = ""
-        orgNoteSel = -1
+        orgSearchOpen = false
+        orgNoteMenu = null
+        orgTaskMenu = null
+        orgCompose = Compose.Closed
         orgTaskSel = -1
     }
 
@@ -243,16 +285,32 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgList = list
     }
 
-    fun orgPickSort(sort: Int) {
-        orgSort = sort.coerceIn(0, 2)
-    }
-
     fun orgPickMode(mode: Int) {
         orgMode = mode.coerceIn(0, 1)
     }
 
+    fun orgPickNoteSort(sort: Int) {
+        orgNoteSort = sort.coerceIn(0, 2)
+    }
+
+    fun orgPickTaskSort(sort: Int) {
+        orgTaskSort = sort.coerceIn(0, 4)
+    }
+
     fun orgSetQuery(query: String) {
         orgQuery = query
+    }
+
+    fun toggleOrgSearch() {
+        orgSearchOpen = !orgSearchOpen
+        // Closing the field clears the needle with it: a filter nobody can see is
+        // the worst of both, and the reference app hides the field the same way.
+        if (!orgSearchOpen) orgQuery = ""
+    }
+
+    fun closeOrgSearch() {
+        orgSearchOpen = false
+        orgQuery = ""
     }
 
     fun orgPickTag(tag: String) {
@@ -264,16 +322,67 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** `-1` closes the detail — the back gesture, and the back chevron. */
-    fun orgSelectNote(id: Long) {
-        orgNoteSel = id
-    }
-
     fun orgSelectTask(id: Long) {
         orgTaskSel = id
     }
 
     fun orgSelectRow(id: Long) {
-        if (orgTab == 0) orgNoteSel = id else orgTaskSel = id
+        orgTaskSel = id
+    }
+
+    fun orgOpenTaskMenu(id: Long) {
+        orgTaskMenu = id
+    }
+
+    fun closeTaskMenu() {
+        orgTaskMenu = null
+    }
+
+    fun orgOpenNoteMenu(id: Long) {
+        orgNoteMenu = id
+    }
+
+    fun closeNoteMenu() {
+        orgNoteMenu = null
+    }
+
+    // ─── the capture sheet ──────────────────────────────────────────────────
+
+    /** The round ＋ on 收件箱: a sheet with an empty field. */
+    fun openNoteComposer() {
+        orgCompose = Compose.NewNote
+        orgDraft = ""
+    }
+
+    /** Tapping a card: the same sheet, with the note's text in it. */
+    fun openNoteEditor(id: Long) {
+        val note = view?.org?.notes?.firstOrNull { it.id == id } ?: return
+        orgCompose = Compose.EditNote(id)
+        orgNoteMenu = null
+        orgDraft = note.body.ifEmpty { note.title }
+    }
+
+    /**
+     * The round ＋ on 任务. A tag filter is pre-filled into the field, which is the
+     * reference app's own habit: a task added while looking at `#工作` starts with
+     * `#工作` in it, so the row lands in the filter it was made in.
+     */
+    fun openTaskComposer() {
+        orgCompose = Compose.NewTask
+        orgDraft = if (orgTag.isNotEmpty()) "#$orgTag " else ""
+    }
+
+    fun orgCloseComposer() {
+        orgCompose = Compose.Closed
+    }
+
+    fun orgSetDraft(text: String) {
+        orgDraft = text
+    }
+
+    fun orgClearDraft() {
+        orgDraft = ""
+        orgCompose = Compose.Closed
     }
 
     // ─── the organizer's writes ─────────────────────────────────────────────
@@ -306,30 +415,40 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun orgCreateNote() = orgCreate(
-        idsOf = { org -> org.notes.map { it.id } },
-        action = { bridge.orgCreateNote() },
-    ) { orgNoteSel = it }
+    /**
+     * ➤ on a new note. The tags are read out of the text — its `#tokens` — and
+     * both travel in **one** command, so a note the user typed is one press of 撤销
+     * away. The derivation is [MarkdownText]'s, which is where the toolbar's rules
+     * live and where they are tested.
+     */
+    fun orgAddNote(body: String) = act { bridge.orgAddNote(body, MarkdownText.tagString(body)) }
 
-    /** A new task, in the list the chips are on — the inbox when none is. */
-    fun orgCreateTask() = orgCreate(
-        idsOf = { org -> org.tasks.map { it.id } },
-        action = { bridge.orgCreateTask(orgList) },
-    ) { orgTaskSel = it }
+    /** ➤ on an open note: the same single command, with the row's own id. */
+    fun orgNoteContent(note: Long, body: String) =
+        act { bridge.orgNoteContent(note, body, MarkdownText.tagString(body)) }
 
     /**
-     * The quick-add line. 今天 is a *date* view, so a task typed into it is due
-     * today — the only reading of "today" that survives the next rebuild — and
-     * the deadline is decided here, by the view the line was typed into.
+     * ➤ on a new task. 今天 is a *date* view, so a task typed into it is due today
+     * — the only reading of "today" that survives the next rebuild — and the
+     * deadline is decided here, by the view the field was opened from.
      */
-    fun orgQuickAdd(title: String, today: String) =
-        act { bridge.orgQuickAdd(orgList, title, if (orgView == ORG_VIEW_TODAY) today else null) }
+    fun orgComposeTask(text: String) = act {
+        val line = text.replace(Regex("\\s+"), " ").trim()
+        bridge.orgQuickAdd(
+            list = orgList,
+            title = line,
+            tags = MarkdownText.tagString(line),
+            due = if (orgView == ORG_VIEW_TODAY) OrgModel.Dates.now().today else null,
+        )
+    }
 
     /**
      * A board column's ＋: add straight into *that* column's list rather than into
      * whatever the chips are on, because the board shows every list at once.
      */
-    fun orgQuickAddTo(list: Long, title: String) = act { bridge.orgQuickAdd(list, title) }
+    fun orgQuickAddTo(list: Long, title: String) = act {
+        bridge.orgQuickAdd(list, title, MarkdownText.tagString(title), null)
+    }
 
     fun orgNoteTitle(note: Long, title: String) = act { bridge.orgNoteTitle(note, title) }
 
@@ -340,7 +459,10 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     fun orgNoteTags(note: Long, tags: String) = act { bridge.orgNoteTags(note, tags) }
 
     fun orgDeleteNote(note: Long) {
-        orgNoteSel = -1
+        if (orgCompose is Compose.EditNote && (orgCompose as Compose.EditNote).id == note) {
+            orgCompose = Compose.Closed
+        }
+        orgNoteMenu = null
         act { bridge.orgDeleteNote(note) }
     }
 
@@ -364,6 +486,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun orgDeleteTask(task: Long) {
         orgTaskSel = -1
+        orgTaskMenu = null
         act { bridge.orgDeleteTask(task) }
     }
 

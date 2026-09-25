@@ -94,7 +94,19 @@ class Bridge(private val handle: Long) {
     // the chips. The Kotlin side debounces the two fields a person types into, so
     // a keystroke does not pay for that.
 
-    fun orgCreateNote(): Reply = send("orgCreateNote")
+    /**
+     * A new note, from the capture sheet: its text and its tags in one command.
+     *
+     * One command and not three because the sheet produces one thing — a note the
+     * user typed — and a create-then-fill would leave a blank row on the undo stack
+     * and cost three presses of 撤销 to put away.
+     */
+    fun orgAddNote(body: String, tags: String): Reply =
+        send("orgAddNote", "body" to body, "tags" to tags)
+
+    /** An open note's text and its tags, together, for the same reason. */
+    fun orgNoteContent(note: Long, body: String, tags: String): Reply =
+        send("orgNoteContent", "note" to note, "body" to body, "tags" to tags)
 
     fun orgNoteTitle(note: Long, title: String): Reply =
         send("orgNoteTitle", "note" to note, "title" to title)
@@ -111,15 +123,13 @@ class Bridge(private val handle: Long) {
 
     fun orgDeleteNote(note: Long): Reply = send("orgDeleteNote", "note" to note)
 
-    /** A new, empty task in `list`; `-1` is the inbox. */
-    fun orgCreateTask(list: Long): Reply = send("orgCreateTask", "list" to list)
-
     /**
-     * The quick-add line. `due` is the ISO date the line was typed into when it
-     * was typed into 今天, and null otherwise.
+     * The capture sheet, and a board column's ＋: create with the title and the
+     * tags it was given, in one step. `due` is the ISO date the field was opened
+     * into when that was 今天, and null otherwise.
      */
-    fun orgQuickAdd(list: Long, title: String, due: String? = null): Reply =
-        send("orgQuickAdd", "list" to list, "title" to title, "due" to due)
+    fun orgQuickAdd(list: Long, title: String, tags: String, due: String? = null): Reply =
+        send("orgQuickAdd", "list" to list, "title" to title, "tags" to tags, "due" to due)
 
     fun orgTaskTitle(task: Long, title: String): Reply =
         send("orgTaskTitle", "task" to task, "title" to title)

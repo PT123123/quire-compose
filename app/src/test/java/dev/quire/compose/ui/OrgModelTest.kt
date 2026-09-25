@@ -170,10 +170,10 @@ class OrgModelTest {
             ),
         )
         // High first, and inside high the earlier day wins; two the same day fall
-        // back to where they were added.
+        // back to where they were added. Slot 3 is 按优先级 in the toolbar's menu.
         assertEquals(
             listOf(3L, 4L, 2L, 5L, 1L),
-            ids(OrgModel.tasks(catalog, ORG_VIEW_ALL, -1, "", 1, -1, false, dates)),
+            ids(OrgModel.tasks(catalog, ORG_VIEW_ALL, -1, "", 3, -1, false, dates)),
         )
     }
 
@@ -187,9 +187,44 @@ class OrgModelTest {
                 task(4),
             ),
         )
+        // Slot 4 is 按截止日期 in the menu the reference app's toolbar opens.
         assertEquals(
             listOf(3L, 2L, 1L, 4L),
-            ids(OrgModel.tasks(catalog, ORG_VIEW_ALL, -1, "", 2, -1, false, dates)),
+            ids(OrgModel.tasks(catalog, ORG_VIEW_ALL, -1, "", 4, -1, false, dates)),
+        )
+    }
+
+    @Test
+    fun the_reverse_sort_is_the_default_ones_mirror() {
+        val catalog = OrgCatalog.Empty.copy(
+            tasks = listOf(task(1, ord = 30), task(2, ord = 10), task(3, ord = 20)),
+        )
+        val forward = ids(OrgModel.tasks(catalog, ORG_VIEW_ALL, -1, "", 0, -1, false, dates))
+        val backward = ids(OrgModel.tasks(catalog, ORG_VIEW_ALL, -1, "", 2, -1, false, dates))
+        assertEquals(listOf(2L, 3L, 1L), forward)
+        assertEquals(forward.reversed(), backward)
+    }
+
+    @Test
+    fun the_recent_sort_is_about_when_a_task_was_made_not_where_it_sits() {
+        // A task dragged to the middle of a list keeps its `ord`, so 最近添加 and
+        // 默认排序 answer different questions.
+        val catalog = OrgCatalog.Empty.copy(
+            tasks = listOf(
+                task(1, ord = 10).copy(created = 100),
+                task(2, ord = 30).copy(created = 300),
+                task(3, ord = 20).copy(created = 200),
+            ),
+        )
+        // 最近添加: newest first.
+        assertEquals(
+            listOf(2L, 3L, 1L),
+            ids(OrgModel.tasks(catalog, ORG_VIEW_ALL, -1, "", 1, -1, false, dates)),
+        )
+        // 默认排序: the placement order, which here is the other way round.
+        assertEquals(
+            listOf(1L, 3L, 2L),
+            ids(OrgModel.tasks(catalog, ORG_VIEW_ALL, -1, "", 0, -1, false, dates)),
         )
     }
 
@@ -203,37 +238,45 @@ class OrgModelTest {
                 task(3, priority = "medium"),
             ),
         )
-        val column = OrgModel.board(catalog, "", sort = 1, dates = dates).first()
+        val column = OrgModel.board(catalog, "", sort = 3, dates = dates).first()
         assertEquals(listOf(2L, 3L, 1L), column.cards.map { it.id })
     }
 
     // ─── notes ──────────────────────────────────────────────────────────────
 
     @Test
-    fun notes_are_read_pinned_first_then_most_recently_edited() {
+    fun the_note_sorts_are_the_three_the_menu_lists() {
         val catalog = OrgCatalog(
             listOf(
-                note(1, edited = 100),
-                note(2, pinned = true, edited = 50),
-                note(3, edited = 900),
-                note(4, pinned = true, edited = 10),
+                note(1, edited = 100, title = "banana").copy(created = 500),
+                note(2, pinned = true, edited = 50, title = "cherry").copy(created = 100),
+                note(3, edited = 900, title = "apple").copy(created = 300),
             ),
             emptyList(),
             emptyList(),
         )
-        // The two pinned ones first (newest of those first), then the rest by
-        // their own recency.
-        assertEquals(listOf(2L, 4L, 3L, 1L), OrgModel.notes(catalog, "", "", -1).map { it.id })
+
+        // 最新创建 is the default: newest first, and the pin above all of it — the
+        // flag is the user saying "this one first", and a sort that overrode it
+        // would make the pin a label rather than an instruction.
+        assertEquals(listOf(2L, 1L, 3L), OrgModel.notes(catalog, "", "", 0, -1).map { it.id })
+        // 最新更新: the pinned one, then by when each was last written.
+        assertEquals(listOf(2L, 3L, 1L), OrgModel.notes(catalog, "", "", 1, -1).map { it.id })
+        // 按内容: alphabetically by the text, which is what a tag-less note list
+        // is read by when the user is looking for a *word*.
+        assertEquals(listOf(2L, 3L, 1L), OrgModel.notes(catalog, "", "", 2, -1).map { it.id })
     }
 
     @Test
-    fun a_note_row_reads_its_excerpt_from_the_first_line_that_says_something() {
-        val catalog = OrgCatalog(
-            listOf(note(1, body = "\n\n  第一行  \n第二行")),
-            emptyList(),
-            emptyList(),
-        )
-        assertEquals("第一行", OrgModel.notes(catalog, "", "", -1)[0].excerpt)
+    fun a_note_card_shows_its_text_and_falls_back_to_the_title() {
+        // The reference app's note is one blob of text, so the card is the body.
+        val body = OrgCatalog.Empty.copy(notes = listOf(note(1, body = "第一行\n第二行")))
+        assertEquals("第一行\n第二行", OrgModel.notes(body, "", "", 0, -1)[0].content)
+
+        // A note the desktop made with a title and no body still reads here: a card
+        // showing nothing is worse than one showing the only thing the row has.
+        val titled = OrgCatalog.Empty.copy(notes = listOf(note(1, title = "会议")))
+        assertEquals("会议", OrgModel.notes(titled, "", "", 0, -1)[0].content)
     }
 
     @Test
@@ -248,13 +291,13 @@ class OrgModelTest {
             emptyList(),
             emptyList(),
         )
-        assertEquals(listOf(1L), OrgModel.notes(catalog, "会议", "", -1).map { it.id })
-        assertEquals(listOf(2L), OrgModel.notes(catalog, "牛奶", "", -1).map { it.id })
-        assertEquals(listOf(3L), OrgModel.notes(catalog, "idea", "", -1).map { it.id })
+        assertEquals(listOf(1L), OrgModel.notes(catalog, "会议", "", 0, -1).map { it.id })
+        assertEquals(listOf(2L), OrgModel.notes(catalog, "牛奶", "", 0, -1).map { it.id })
+        assertEquals(listOf(3L), OrgModel.notes(catalog, "idea", "", 0, -1).map { it.id })
         // The tag filter is a separate question from the needle, and 全部笔记 is
         // the empty tag rather than a tag nobody has.
-        assertEquals(listOf(3L), OrgModel.notes(catalog, "", "idea", -1).map { it.id })
-        assertEquals(4, OrgModel.notes(catalog, "", "", -1).size)
+        assertEquals(listOf(3L), OrgModel.notes(catalog, "", "idea", 0, -1).map { it.id })
+        assertEquals(4, OrgModel.notes(catalog, "", "", 0, -1).size)
     }
 
     @Test

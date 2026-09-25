@@ -142,8 +142,23 @@ pub enum Request {
     // it holds — the plan has no store to read from. The high-level shape is what
     // keeps the Kotlin side from having to mirror nine change variants and an
     // ordering rule; it sends intent, and the session decides what that means.
-    /// A new, empty note. The id is the session's to allocate.
-    OrgCreateNote,
+    /// A new note from the quick-capture sheet: its text and the tags its
+    /// `#tokens` name, in one command — so one 撤销 puts the whole note away.
+    OrgAddNote {
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        tags: String,
+    },
+    /// A note's whole text and its tags together — what the editor sheet commits,
+    /// for the reason above: one sheet, one step.
+    OrgNoteContent {
+        note: i64,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        tags: String,
+    },
     OrgNoteTitle {
         note: i64,
         title: String,
@@ -166,15 +181,14 @@ pub enum Request {
         note: i64,
     },
 
-    /// A new, empty task in `list` (`-1` = the inbox).
-    OrgCreateTask {
-        list: i64,
-    },
-    /// The quick-add line: create and title in one step, and set the deadline
-    /// when `due` is given (the 今天 view types a task that is due today).
+    /// The quick-capture sheet: create, title and tag in one step, and set the
+    /// deadline when `due` is given (the 今天 view types a task that is due today).
     OrgQuickAdd {
         list: i64,
+        #[serde(default)]
         title: String,
+        #[serde(default)]
+        tags: String,
         #[serde(default)]
         due: Option<String>,
     },
@@ -502,9 +516,12 @@ impl Session {
             // counts in the chips moved. The Kotlin side debounces the two fields
             // a person types into, which is what keeps that cost off the keystroke
             // path.
-            Request::OrgCreateNote => {
-                self.org_op(|org, doc, hist| org.create_note(doc, hist))
+            Request::OrgAddNote { body, tags } => {
+                self.org_op(|org, doc, hist| org.add_note(doc, hist, body, tags))
             }
+            Request::OrgNoteContent { note, body, tags } => self.org_op(|org, doc, hist| {
+                org.set_note_content(doc, hist, note, body, tags)
+            }),
             Request::OrgNoteTitle { note, title } => {
                 self.org_op(|org, doc, hist| org.note_title(doc, hist, note, title))
             }
@@ -520,12 +537,9 @@ impl Session {
             Request::OrgDeleteNote { note } => {
                 self.org_op(|org, doc, hist| org.delete_note(doc, hist, note))
             }
-            Request::OrgCreateTask { list } => {
-                self.org_op(|org, doc, hist| org.create_task(doc, hist, list))
-            }
-            Request::OrgQuickAdd { list, title, due } => {
-                self.org_op(|org, doc, hist| org.quick_add(doc, hist, list, title, due))
-            }
+            Request::OrgQuickAdd { list, title, tags, due } => self.org_op(|org, doc, hist| {
+                org.quick_add(doc, hist, list, title, tags, due)
+            }),
             Request::OrgTaskTitle { task, title } => {
                 self.org_op(|org, doc, hist| org.task_title(doc, hist, task, title))
             }

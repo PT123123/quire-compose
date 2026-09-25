@@ -52,3 +52,34 @@ private fun curveIcon(name: String, mirrored: Boolean): ImageVector =
 val IcUndo: ImageVector by lazy { curveIcon("IcUndo", mirrored = false) }
 
 val IcRedo: ImageVector by lazy { curveIcon("IcRedo", mirrored = true) }
+
+/**
+ * The sort glyph: three rules of decreasing length with a caret over them.
+ *
+ * Drawn for the same reason 撤销 and 重做 are — `Icons.Default.Sort` lives in
+ * `material-icons-extended`, which is megabytes for one glyph in a UI whose SPEC
+ * ranks low RAM above maintainability.
+ */
+val IcSort: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "IcSort",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(
+            fill = null,
+            stroke = SolidColor(Color.Black),
+            strokeLineWidth = 1.8f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        ) {
+            // A downward caret, then the three rules it orders.
+            moveTo(9f, 4.5f); lineTo(12f, 7.5f); lineTo(15f, 4.5f)
+            moveTo(4f, 11f); lineTo(20f, 11f)
+            moveTo(6.5f, 15f); lineTo(17.5f, 15f)
+            moveTo(9f, 19f); lineTo(15f, 19f)
+        }
+    }.build()
+}

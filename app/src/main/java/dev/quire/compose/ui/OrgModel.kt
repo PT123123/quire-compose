@@ -50,7 +50,19 @@ object OrgModel {
     /** `Repeat::ALL`'s labels, in its order: the slot is the index. */
     val repeatNames: List<String> = listOf("不重复", "每天", "工作日", "每周", "每月")
 
-    val sortNames: List<String> = listOf("添加顺序", "优先级", "截止日期")
+    /**
+     * The 笔记 tab's three sorts, in the order its menu lists them. The reference
+     * app's own three: 最新创建 / 最新更新 / 按内容.
+     */
+    val noteSortNames: List<String> = listOf("最新创建", "最新更新", "按内容")
+
+    /**
+     * The 任务 tab's five sorts, again the reference app's own list. `反向` is not
+     * a replacement for 默认排序 but its mirror, which is why the two are separate
+     * slots rather than one slot with a flag.
+     */
+    val taskSortNames: List<String> =
+        listOf("默认排序", "最近添加", "反向", "按优先级", "按截止日期")
 
     /** The stored spellings, in slot order — `Priority::as_str`'s own list. */
     private val priorityKeys = listOf("none", "low", "medium", "high")
@@ -78,16 +90,21 @@ object OrgModel {
 
     // ─── the rows a screen draws ────────────────────────────────────────────
 
-    /** One note as the 笔记 list paints it. */
+    /**
+     * One note as its card paints it.
+     *
+     * There is no title: the reference app's note *is* one blob of text, and this
+     * card is that blob, its tags and its age. A note the desktop made with a
+     * title and no body still reads here — the title is what the card falls back
+     * to, because a card with nothing in it is worse than one showing the only
+     * thing the row has.
+     */
     data class NoteRow(
         val id: Long,
-        val title: String,
-        val body: String,
-        /** The body's first non-empty line: what a list of notes is read by. */
-        val excerpt: String,
-        val pinned: Boolean,
-        val tags: String,
+        val content: String,
+        val tags: List<String>,
         val whenText: String,
+        val pinned: Boolean,
         val selected: Boolean,
     )
 
@@ -155,18 +172,18 @@ object OrgModel {
 
     // ─── notes ──────────────────────────────────────────────────────────────
 
-    fun notes(catalog: OrgCatalog, query: String, tag: String, selected: Long): List<NoteRow> {
+    fun notes(
+        catalog: OrgCatalog,
+        query: String,
+        tag: String,
+        sort: Int,
+        selected: Long,
+    ): List<NoteRow> {
         val needle = query.trim().lowercase()
-        return catalog.notes
+        val rows = catalog.notes
             .filter { noteMatches(it, needle) }
             .filter { tag.isEmpty() || it.tags.any { candidate -> candidate == tag } }
-            // Pinned first, then most recently edited: the order a quick-note list
-            // is read in, and the one every note app opens on.
-            .sortedWith(
-                compareByDescending<OrgNote> { it.pinned }
-                    .thenByDescending { it.edited }
-                    .thenByDescending { it.id },
-            )
+        return sortNotes(rows, sort)
             .map { noteRow(it, it.id == selected) }
     }
 
@@ -175,14 +192,33 @@ object OrgModel {
 
     fun noteRow(note: OrgNote, selected: Boolean) = NoteRow(
         id = note.id,
-        title = note.title,
-        body = note.body,
-        excerpt = note.body.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: "",
-        pinned = note.pinned,
-        tags = note.tags.joinToString(", "),
+        // The card is the note's text; a note with a title and no body falls back
+        // to the title rather than to an empty card.
+        content = note.body.ifEmpty { note.title },
+        tags = note.tags,
         whenText = ageText(note.edited),
+        pinned = note.pinned,
         selected = selected,
     )
+
+    /**
+     * The three note sorts, with the pin above all of them: the flag is the user
+     * saying "this one first", and a sort that overrode it would make the pin a
+     * label rather than an instruction.
+     */
+    private fun sortNotes(notes: List<OrgNote>, sort: Int): List<OrgNote> =
+        notes.sortedWith(
+            compareByDescending<OrgNote> { it.pinned }
+                .then(
+                    when (sort) {
+                        1 -> compareByDescending<OrgNote> { it.edited }.thenByDescending { it.id }
+                        2 -> compareBy<OrgNote> { it.body.ifEmpty { it.title }.lowercase() }
+                            .thenByDescending { it.id }
+                        // 最新创建, the default: what the reference app opens on.
+                        else -> compareByDescending<OrgNote> { it.created }.thenByDescending { it.id }
+                    },
+                ),
+        )
 
     /** The 笔记 tab's tag column: a fold of the notes, most used first. */
     fun tagChips(catalog: OrgCatalog): List<TagChip> {
@@ -375,7 +411,7 @@ object OrgModel {
             // The header is the *tab's* header: the notes count notes, and a board
             // counts lists — one line reading "2 项待办" over a list of notes would
             // be the window describing something it is not showing.
-            val notes = notes(catalog, query, tag, selected = -1)
+            val notes = notes(catalog, query, tag, sort = 0, selected = -1)
             return (if (tag.isEmpty()) "全部笔记" else tag) to "${notes.size} 条笔记"
         }
         if (mode == 1) {
@@ -428,27 +464,37 @@ object OrgModel {
     }
 
     /**
-     * The three sorts, in one place because the list and the board share them: a
+     * The five sorts, in one place because the list and the board share them: a
      * column's cards and the list's rows have to answer "which is next"
      * identically, or a task would sit in a different position depending on which
      * view asked.
      */
     private fun sortTasks(tasks: List<OrgTask>, sort: Int): List<OrgTask> = when (sort) {
-        // 优先级, and then the earlier deadline, and then where it was added.
-        1 -> tasks.sortedWith(
+        // 按优先级, and then the earlier deadline, and then where it was added.
+        3 -> tasks.sortedWith(
             compareByDescending<OrgTask> { prioritySlot(it.priority) }
                 .thenBy { it.due ?: "" }
                 .thenBy { it.ord },
         )
-        // 截止日期: undated last, then by day, then by where it was added.
-        2 -> tasks.sortedWith(
+        // 按截止日期: undated last, then by day, then by where it was added.
+        4 -> tasks.sortedWith(
             compareBy<OrgTask> { it.due == null }
                 .thenBy { it.due ?: "" }
                 .thenBy { it.ord },
         )
-        // Any other slot — including 0, the default — is the order they were
-        // added: `ord` is this area's own reading order, and the two sorts above
-        // are questions asked *of* it rather than replacements for it.
+        // 最近添加: newest first, which is not the same question as 默认排序 —
+        // that one is the order the tasks were *placed* in, and a task dragged
+        // into the middle of a list keeps its place under it.
+        1 -> tasks.sortedWith(
+            compareByDescending<OrgTask> { it.created }.thenBy { it.ord },
+        )
+        // 反向: 默认排序's mirror, which is why it is a slot of its own.
+        2 -> tasks.sortedWith(
+            compareByDescending<OrgTask> { it.list }.thenByDescending { it.ord },
+        )
+        // 默认排序, and any slot a future build writes: `ord` is this area's own
+        // reading order, and every sort above is a question asked *of* it rather
+        // than a replacement for it.
         else -> tasks.sortedWith(compareBy({ it.list }, { it.ord }))
     }
 

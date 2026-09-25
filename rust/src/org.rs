@@ -242,23 +242,32 @@ impl Organizer {
 
     // ─── notes ──────────────────────────────────────────────────────────────
 
-    /// A new, empty note. The id and both instants are stamped here, which is
-    /// what makes the undo of "new note" restore *this* note rather than a copy of
-    /// it. It is also the one write the area never asks the user for, so the row
-    /// starts untitled and the caret goes to the title.
-    pub fn create_note(
+    /// A new note with its text and its tags already in it.
+    ///
+    /// This is the phone's one-field note: the quick-capture sheet asks for one
+    /// blob of text and derives the tags from its `#tokens`, so creating the row
+    /// and filling it have to be **one command** — a blank row nobody asked for is
+    /// not a step the undo stack should hold, and "undo my note" must put it away
+    /// in one press.
+    ///
+    /// The core's `title` stays empty: this shell's note *is* its text (the
+    /// reference app's is too), and a derived title would show the first line
+    /// twice on the desktop, whose list paints a title and an excerpt.
+    pub fn add_note(
         &mut self,
         doc: &mut Document,
         hist: &mut History,
+        body: String,
+        tags: String,
     ) -> Result<Vec<Change>, String> {
         let id = self.next_note;
         let now = now_secs();
         let note = Note {
             id: NoteId(id),
             title: String::new(),
-            body: String::new(),
+            body,
             pinned: false,
-            tags: Vec::new(),
+            tags: parse_tags(&tags),
             created: now,
             edited: now,
         };
@@ -295,6 +304,24 @@ impl Organizer {
                 },
             )
             .unwrap_or_default())
+    }
+
+    /// A note's whole text and its tags, in one step — what the editor sheet
+    /// commits. The two travel together because one sheet produced both: a body
+    /// command plus a tags command would be two presses of 撤销 for one edit.
+    pub fn set_note_content(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        id: i64,
+        body: String,
+        tags: String,
+    ) -> Result<Vec<Change>, String> {
+        let tags = parse_tags(&tags);
+        self.edit_note(doc, hist, id, move |n| {
+            n.body = body;
+            n.tags = tags;
+        })
     }
 
     pub fn note_title(
@@ -362,8 +389,8 @@ impl Organizer {
         OrderKey::between(last, None)
     }
 
-    /// A new task, already titled and (when the line it came from was 今天)
-    /// already due. One `CreateTask` rather than a create plus an update, so a
+    /// A new task, already titled, tagged and (when the line it came from was
+    /// 今天) already due. One `CreateTask` rather than a create plus updates, so a
     /// quick-add is **one** undo step and a blank row nobody asked for never
     /// exists to be held by the stack.
     fn new_task(
@@ -372,6 +399,7 @@ impl Organizer {
         hist: &mut History,
         list: i64,
         title: String,
+        tags: Vec<String>,
         due: Option<String>,
     ) -> Result<Vec<Change>, String> {
         let list = if list >= 0 {
@@ -394,7 +422,7 @@ impl Organizer {
             repeat: Repeat::None,
             done: false,
             completed_at: None,
-            tags: Vec::new(),
+            tags,
             subtasks: Vec::new(),
             created: now,
             edited: now,
@@ -407,37 +435,30 @@ impl Organizer {
         Ok(changes)
     }
 
-    /// The ＋ in the area's bar: a new, empty task in the list on screen.
-    pub fn create_task(
-        &mut self,
-        doc: &mut Document,
-        hist: &mut History,
-        list: i64,
-    ) -> Result<Vec<Change>, String> {
-        self.new_task(doc, hist, list, String::new(), None)
-    }
-
-    /// The quick-add line, and a board column's ＋. `due` is `Some` when the line
-    /// was typed into 今天, because 今天 is a *date* view — a task typed into it is
-    /// due today, which is the only reading of "today" that survives the next
-    /// rebuild. A blank line is not a row and not a step.
+    /// The quick-capture sheet and a board column's ＋: one write, and the row it
+    /// makes is already titled and tagged. `due` is `Some` when the task was typed
+    /// into 今天, because 今天 is a *date* view — a task typed into it is due today,
+    /// which is the only reading of "today" that survives the next rebuild. A blank
+    /// line is not a row and not a step.
     pub fn quick_add(
         &mut self,
         doc: &mut Document,
         hist: &mut History,
         list: i64,
         title: String,
+        tags: String,
         due: Option<String>,
     ) -> Result<Vec<Change>, String> {
         let title = title.trim().to_string();
-        if title.is_empty() {
+        let tags = parse_tags(&tags);
+        if title.is_empty() && tags.is_empty() {
             return Ok(Vec::new());
         }
         let due = match due {
             Some(due) if !due.trim().is_empty() => Some(check_date(&due)?),
             _ => None,
         };
-        self.new_task(doc, hist, list, title, due)
+        self.new_task(doc, hist, list, title, tags, due)
     }
 
     fn edit_task(

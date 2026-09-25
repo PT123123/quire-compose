@@ -53,7 +53,8 @@ fun Sidebar(
     view: View,
     vm: QuireViewModel,
     onPageMenu: (Long) -> Unit,
-    onOpenOrganizer: (Int) -> Unit,
+    onOpenNotes: () -> Unit,
+    onOpenTasks: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val colors = LocalQuireColors.current
@@ -75,11 +76,13 @@ fun Sidebar(
             )
         }
 
-        // SPEC §四十一: the way into the second area, in the same place the desktop
-        // shell keeps it — two rows under the header, above the tree. They are "go
-        // somewhere", not commands, which is why neither carries a shortcut hint.
-        SidebarAction(label = "笔记", icon = Icons.Default.Edit, onClick = { onOpenOrganizer(0) })
-        SidebarAction(label = "任务", icon = Icons.Default.CheckCircle, onClick = { onOpenOrganizer(1) })
+        // SPEC §四十一: the way into the other two pages, in the same place the
+        // reference app keeps them — two rows under the header, above the tree.
+        // They are *destinations*, which is why they are separate rows and not two
+        // tabs on one screen: 收件箱 and 任务 have their own toolbars and their own
+        // state, and the drawer is the only thing between them (ADR-0013).
+        SidebarAction(label = "收件箱", icon = Icons.Default.Edit, onClick = onOpenNotes)
+        SidebarAction(label = "任务", icon = Icons.Default.CheckCircle, onClick = onOpenTasks)
         HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
         LazyColumn(modifier = Modifier.weight(1f)) {

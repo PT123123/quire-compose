@@ -94,11 +94,14 @@ private fun StartupScreen(error: String?) {
 }
 
 /**
- * Which of the two top-level areas is on screen. SPEC §四十一 gives the shell
- * exactly two, and the document is not destroyed by leaving it — a page opened on
- * the way into 笔记 is still open on the way back.
+ * Which destination is on screen.
+ *
+ * Three, because SPEC §四十一's second and third are *separate pages* in the
+ * reference app — 收件箱 and 任务 are two drawer entries with two toolbars, not two
+ * tabs on one page — and because the document is not destroyed by leaving it: a
+ * page opened on the way into 笔记 is still open on the way back (ADR-0013).
  */
-private enum class Area { Pages, Organizer }
+private enum class Area { Pages, Notes, Tasks }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -116,17 +119,15 @@ private fun Shell(view: View, vm: QuireViewModel) {
     var deleteFor by remember { mutableStateOf<Long?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
 
-    // SPEC §四十一's second top-level area. The document is not *replaced* — it
-    // stays exactly where it was, and switching back finds it there (ADR-0013).
     var area by remember { mutableStateOf(Area.Pages) }
-    val inOrganizerDetail = area == Area.Organizer && organizerInDetail(vm)
 
     // The back gesture, in the order a touch user expects: leave the open row's
-    // form, then leave the area, and only then let the system have it. A phone has
-    // no other way to a "up one level".
-    BackHandler(enabled = area == Area.Organizer) {
+    // form, then leave the destination, and only then let the system have it. A
+    // phone has no other way to a "up one level".
+    BackHandler(enabled = area != Area.Pages) {
         when {
-            inOrganizerDetail -> vm.orgSelectRow(-1)
+            area == Area.Notes && vm.orgCompose != QuireViewModel.Compose.Closed -> vm.orgCloseComposer()
+            area == Area.Tasks && organizerInDetail(vm) -> vm.orgSelectRow(-1)
             else -> area = Area.Pages
         }
     }
@@ -143,10 +144,15 @@ private fun Shell(view: View, vm: QuireViewModel) {
                     view = view,
                     vm = vm,
                     onPageMenu = { pageMenuFor = it },
-                    onOpenOrganizer = { tab ->
+                    onOpenNotes = {
                         scope.launch { drawerState.close() }
-                        vm.openOrganizer(tab)
-                        area = Area.Organizer
+                        vm.openNotes()
+                        area = Area.Notes
+                    },
+                    onOpenTasks = {
+                        scope.launch { drawerState.close() }
+                        vm.openTasks()
+                        area = Area.Tasks
                     },
                     onOpenSettings = {
                         scope.launch { drawerState.close() }
@@ -159,10 +165,10 @@ private fun Shell(view: View, vm: QuireViewModel) {
         Scaffold(
             containerColor = colors.background,
             topBar = {
-                if (area == Area.Organizer) {
-                    OrganizerBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
-                } else {
-                    TopBar(
+                when (area) {
+                    Area.Notes -> NotesBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
+                    Area.Tasks -> TasksBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
+                    Area.Pages -> TopBar(
                         view = view,
                         vm = vm,
                         onOpenDrawer = { scope.launch { drawerState.open() } },
@@ -173,13 +179,19 @@ private fun Shell(view: View, vm: QuireViewModel) {
             Column(modifier = Modifier.padding(padding)) {
                 vm.notice?.let { NoticeBar(it, vm::dismissNotice) }
                 vm.error?.let { ErrorBar(it, vm::dismissError) }
-                if (area == Area.Organizer) {
-                    OrganizerScreen(vm = vm)
-                } else {
-                    EditorScreen(view = view, vm = vm, onBlockMenu = { blockMenuFor = it })
+                when (area) {
+                    Area.Notes -> NotesPage(vm = vm)
+                    Area.Tasks -> TasksPage(vm = vm)
+                    Area.Pages -> EditorScreen(view = view, vm = vm, onBlockMenu = { blockMenuFor = it })
                 }
             }
         }
+    }
+
+    // The capture sheet is one sheet for both destinations, because it is one
+    // gesture: ＋ opens it, ➤ closes it, and a swipe down loses nothing.
+    if (area != Area.Pages && vm.orgCompose != QuireViewModel.Compose.Closed) {
+        ComposeSheet(vm = vm, onDismiss = vm::orgCloseComposer)
     }
 
     val menuBlock = blockMenuFor?.let { id -> view.blocks.firstOrNull { it.id == id } }

@@ -283,23 +283,21 @@ fn a_locked_page_refuses_block_edits() {
 fn a_note_and_a_task_and_a_list_all_survive_a_restart() {
     let mut h = Harness::new("org-round-trip");
 
-    let note = h.ok(r#"{"op":"orgCreateNote"}"#)["org"]["notes"][0]["id"]
+    let note = h.ok(r#"{"op":"orgAddNote","body":"first line\nsecond"}"#)["org"]["notes"][0]["id"]
         .as_u64()
         .expect("the new note is a row");
     h.ok(&format!(r#"{{"op":"orgNoteTitle","note":{note},"title":"想法"}}"#));
-    h.ok(&format!(r#"{{"op":"orgNoteBody","note":{note},"body":"第一行\n第二行"}}"#));
     h.ok(&format!(r#"{{"op":"orgNoteTags","note":{note},"tags":"idea, 灵感"}}"#));
     h.ok(&format!(r#"{{"op":"orgNotePinned","note":{note},"pinned":true}}"#));
 
     let list = h.ok(r#"{"op":"orgCreateList","name":"工作"}"#)["org"]["lists"][0]["id"]
         .as_u64()
         .expect("the new list is a row");
-    let task = h.ok(&format!(r#"{{"op":"orgCreateTask","list":{list}}}"#))["org"]["tasks"][0]
-        ["id"]
+    let task = h.ok(&format!(r#"{{"op":"orgQuickAdd","list":{list},"title":"写桥接层"}}"#))["org"]
+        ["tasks"][0]["id"]
         .as_u64()
         .expect("the new task is a row");
 
-    h.ok(&format!(r#"{{"op":"orgTaskTitle","task":{task},"title":"写桥接层"}}"#));
     h.ok(&format!(r#"{{"op":"orgTaskPriority","task":{task},"slot":3}}"#));
     h.ok(&format!(r#"{{"op":"orgTaskDue","task":{task},"due":"2026-09-30"}}"#));
     h.ok(&format!(r#"{{"op":"orgTaskRepeat","task":{task},"slot":2}}"#));
@@ -321,7 +319,7 @@ fn a_note_and_a_task_and_a_list_all_survive_a_restart() {
 
     let note = h.note();
     assert_eq!(note["title"], "想法");
-    assert_eq!(note["body"], "第一行\n第二行");
+    assert_eq!(note["body"], "first line\nsecond");
     assert_eq!(note["tags"][0], "idea");
     assert_eq!(note["tags"][1], "灵感");
     assert_eq!(note["pinned"], Value::Bool(true));
@@ -355,7 +353,7 @@ fn the_area_has_its_own_undo_and_the_page_has_its_own() {
     // A page with one block, and a note.
     h.ok(r#"{"op":"createPage","title":"doc"}"#);
     h.ok(r#"{"op":"appendBlock","kind":"paragraph","text":"page text"}"#);
-    let note = h.ok(r#"{"op":"orgCreateNote"}"#)["org"]["notes"][0]["id"]
+    let note = h.ok(r#"{"op":"orgAddNote"}"#)["org"]["notes"][0]["id"]
         .as_u64()
         .unwrap();
     h.ok(&format!(r#"{{"op":"orgNoteTitle","note":{note},"title":"area text"}}"#));
@@ -384,7 +382,7 @@ fn an_empty_stack_stops_claiming_a_step() {
     assert_eq!(view["orgCanUndo"], Value::Bool(false));
     assert_eq!(view["orgCanRedo"], Value::Bool(false));
 
-    h.ok(r#"{"op":"orgCreateNote"}"#);
+    h.ok(r#"{"op":"orgAddNote"}"#);
     let view = h.view();
     assert_eq!(view["orgCanUndo"], Value::Bool(true));
     assert_eq!(view["orgCanRedo"], Value::Bool(false));
@@ -421,7 +419,7 @@ fn deleting_a_list_files_its_tasks_in_the_inbox_and_undo_brings_both_back() {
         .as_u64()
         .unwrap();
     for title in ["a", "b"] {
-        let id = h.ok(&format!(r#"{{"op":"orgCreateTask","list":{list}}}"#))["org"]["tasks"]
+        let id = h.ok(&format!(r#"{{"op":"orgQuickAdd","list":{list},"title":"t"}}"#))["org"]["tasks"]
             [0]["id"]
             .as_u64()
             .unwrap();
@@ -466,11 +464,88 @@ fn a_quick_add_is_one_step_and_carries_the_deadline_it_was_typed_into() {
     assert!(view["org"]["tasks"].as_array().unwrap().is_empty());
 }
 
+/// The quick-capture sheet is the only way a task is made on this shell, so it
+/// carries the title **and** the tags its `#tokens` name, in one command.
+#[test]
+fn a_quick_add_carries_the_tags_its_tokens_name() {
+    let mut h = Harness::new("org-quick-add-tags");
+
+    let view = h.ok(
+        r#"{"op":"orgQuickAdd","list":-1,"title":"修桥接层","tags":"工作, 安卓"}"#,
+    );
+    let task = &view["org"]["tasks"][0];
+    assert_eq!(task["title"], "修桥接层");
+    assert_eq!(task["tags"][0], "工作");
+    assert_eq!(task["tags"][1], "安卓");
+
+    // A sheet with tags but no title is still a task: the tags are the whole of
+    // what the line said.
+    let view = h.ok(r#"{"op":"orgQuickAdd","list":-1,"tags":"idea"}"#);
+    assert_eq!(view["org"]["tasks"].as_array().unwrap().len(), 2);
+
+    // …and a sheet with neither is not a row and not a step.
+    let view = h.ok(r#"{"op":"orgQuickAdd","list":-1,"title":"  ","tags":""}"#);
+    assert_eq!(view["org"]["tasks"].as_array().unwrap().len(), 2);
+
+    // Both creates go away in one press each.
+    h.ok(r#"{"op":"orgUndo"}"#);
+    let view = h.ok(r#"{"op":"orgUndo"}"#);
+    assert!(view["org"]["tasks"].as_array().unwrap().is_empty());
+}
+
+/// The phone's note is one text field: the sheet sends the blob and the tags its
+/// `#tokens` name, and both land in **one** command — so the note the user typed
+/// is one press of 撤销 away, with no half-built row in between.
+#[test]
+fn a_note_is_created_with_its_text_and_tags_in_one_step() {
+    let mut h = Harness::new("org-add-note");
+
+    let view = h.ok(r#"{"op":"orgAddNote","body":"会议记录 #工作 #idea","tags":"工作, idea"}"#);
+    let note = &view["org"]["notes"][0];
+    assert_eq!(note["body"], "会议记录 #工作 #idea");
+    // The tag list is the parsed one, and it is the same `parse_tags` a typed
+    // comma string goes through: one place decides what the input means.
+    assert_eq!(note["tags"][0], "工作");
+    assert_eq!(note["tags"][1], "idea");
+    // No derived title: this shell's note *is* its text, and the desktop's list
+    // paints a title and an excerpt — the same line twice would be worse than
+    // 无标题.
+    assert_eq!(note["title"], "");
+
+    // One step for the whole note.
+    let view = h.ok(r#"{"op":"orgUndo"}"#);
+    assert!(view["org"]["notes"].as_array().unwrap().is_empty());
+}
+
+/// The editor sheet sets a note's text and its tags together, for the reason the
+/// create does: one sheet produced both, and two commands would be two 撤销.
+#[test]
+fn editing_a_note_sets_its_text_and_tags_in_one_step() {
+    let mut h = Harness::new("org-note-content");
+
+    let note = h.ok(r#"{"op":"orgAddNote","body":"before"}"#)["org"]["notes"][0]["id"]
+        .as_u64()
+        .unwrap();
+
+    let view = h.ok(&format!(
+        r#"{{"op":"orgNoteContent","note":{note},"body":"after #x","tags":"x"}}"#
+    ));
+    let row = &view["org"]["notes"][0];
+    assert_eq!(row["body"], "after #x");
+    assert_eq!(row["tags"][0], "x");
+
+    // One step takes both fields back.
+    let view = h.ok(r#"{"op":"orgUndo"}"#);
+    let row = &view["org"]["notes"][0];
+    assert_eq!(row["body"], "before");
+    assert!(row["tags"].as_array().unwrap().is_empty());
+}
+
 #[test]
 fn a_subtask_draws_on_the_task_counter_and_never_collides() {
     let mut h = Harness::new("org-subtask-ids");
 
-    let task = h.ok(r#"{"op":"orgCreateTask","list":-1}"#)["org"]["tasks"][0]["id"]
+    let task = h.ok(r#"{"op":"orgQuickAdd","list":-1,"title":"t"}"#)["org"]["tasks"][0]["id"]
         .as_u64()
         .unwrap();
     h.ok(&format!(r#"{{"op":"orgSubtaskAdd","task":{task}}}"#));
@@ -483,7 +558,7 @@ fn a_subtask_draws_on_the_task_counter_and_never_collides() {
 
     // A second task's id must clear the subtask ids already handed out, or a new
     // checklist line would collide with one inside the first task.
-    let second = h.ok(r#"{"op":"orgCreateTask","list":-1}"#)["org"]["tasks"][1]["id"]
+    let second = h.ok(r#"{"op":"orgQuickAdd","list":-1,"title":"t"}"#)["org"]["tasks"][1]["id"]
         .as_u64()
         .unwrap();
     assert!(second > last_subtask);
@@ -507,7 +582,7 @@ fn the_task_menu_operations_each_land_and_each_undo() {
     // A blank name becomes the placeholder rather than an unnamed chip.
     assert_eq!(h.list()["name"], "新建清单");
 
-    let task = h.ok(r#"{"op":"orgCreateTask","list":-1}"#)["org"]["tasks"][0]["id"]
+    let task = h.ok(r#"{"op":"orgQuickAdd","list":-1,"title":"t"}"#)["org"]["tasks"][0]["id"]
         .as_u64()
         .unwrap();
 
@@ -529,7 +604,7 @@ fn the_task_menu_operations_each_land_and_each_undo() {
 fn an_edit_that_changes_nothing_is_not_a_step() {
     let mut h = Harness::new("org-noop");
 
-    let note = h.ok(r#"{"op":"orgCreateNote"}"#)["org"]["notes"][0]["id"]
+    let note = h.ok(r#"{"op":"orgAddNote"}"#)["org"]["notes"][0]["id"]
         .as_u64()
         .unwrap();
     h.ok(&format!(r#"{{"op":"orgNoteTitle","note":{note},"title":"same"}}"#));
@@ -553,7 +628,7 @@ fn a_bad_id_or_a_bad_date_is_an_error_not_a_silent_write() {
         .err(r#"{"op":"orgSubtaskAdd","task":404}"#)
         .contains("no such task"));
 
-    let task = h.ok(r#"{"op":"orgCreateTask","list":-1}"#)["org"]["tasks"][0]["id"]
+    let task = h.ok(r#"{"op":"orgQuickAdd","list":-1,"title":"t"}"#)["org"]["tasks"][0]["id"]
         .as_u64()
         .unwrap();
     // The deadline column holds `core::date`'s one format or nothing: a string no
@@ -580,7 +655,7 @@ fn a_locked_page_does_not_lock_the_organizer() {
         .unwrap();
     h.ok(&format!(r#"{{"op":"setPageLocked","page":{page},"locked":true}}"#));
 
-    let note = h.ok(r#"{"op":"orgCreateNote"}"#)["org"]["notes"][0]["id"]
+    let note = h.ok(r#"{"op":"orgAddNote"}"#)["org"]["notes"][0]["id"]
         .as_u64()
         .unwrap();
     h.ok(&format!(r#"{{"op":"orgNoteTitle","note":{note},"title":"写着呢"}}"#));

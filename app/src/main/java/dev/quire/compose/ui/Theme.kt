@@ -30,6 +30,15 @@ data class QuireColors(
     val surface: Color,
     val surfaceHover: Color,
     val surfaceSelected: Color,
+    /**
+     * The organizer's card plate: a translucent overlay rather than an opaque
+     * colour, so it takes the page's own tone underneath it — the "glass" the
+     * reference app draws every note and task row on (`inbox_card`'s 8% white,
+     * `aw_surface_glass`'s 6% black). A flat grey would be a second background
+     * colour to keep in step with the theme.
+     */
+    val card: Color,
+    val cardBorder: Color,
     val codeBackground: Color,
     val textPrimary: Color,
     val textSecondary: Color,
@@ -52,6 +61,8 @@ private val LightColors = QuireColors(
     surface = Color(0xFFFFFFFF),
     surfaceHover = Color(0xFFEFEFEC),
     surfaceSelected = Color(0xFFE8E8E4),
+    card = Color(0x0F000000),
+    cardBorder = Color(0x14000000),
     codeBackground = Color(0xFFF6F6F4),
     textPrimary = Color(0xFF1F2328),
     textSecondary = Color(0xFF5F6569),
@@ -74,6 +85,8 @@ private val DarkColors = QuireColors(
     surface = Color(0xFF1F1F24),
     surfaceHover = Color(0xFF26262C),
     surfaceSelected = Color(0xFF2D2D34),
+    card = Color(0x14FFFFFF),
+    cardBorder = Color(0x1FFFFFFF),
     codeBackground = Color(0xFF101014),
     textPrimary = Color(0xFFE7E7EA),
     textSecondary = Color(0xFFB4B4BB),
