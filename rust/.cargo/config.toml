@@ -1,0 +1,5 @@
+# Cargo's own libgit2 cannot fetch the public quire-core repo: it offers
+# credentials nobody asked for and takes a 401, so a fresh clone cannot build
+# without this (ADR-0094 in the desktop repo; both existing shells carry it).
+[net]
+git-fetch-with-cli = true
