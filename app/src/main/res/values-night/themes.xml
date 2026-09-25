@@ -1,0 +1,10 @@
+<resources>
+    <!-- The dark counterpart: the same theme, with the window behind the first
+         frame set to the palette's own dark background (#1a1a1e). -->
+    <style name="Theme.Quire" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF1A1A1E</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

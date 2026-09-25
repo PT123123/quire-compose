@@ -1,0 +1,20 @@
+# Gradle / Android
+.gradle/
+build/
+local.properties
+keystore.properties
+*.apk
+*.aab
+captures/
+.cxx/
+
+# Rust
+rust/target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# scratch
+.scratch/

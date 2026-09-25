@@ -1,0 +1,14 @@
+<resources>
+    <!--
+      The platform theme is a placeholder and nothing more: Compose draws every
+      pixel of this app (Theme.kt holds the palette). What it must get right is
+      the window behind the first frame and the two system bars, so the launch
+      does not flash white before the app's own surface arrives.
+    -->
+    <style name="Theme.Quire" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFFFFFF</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

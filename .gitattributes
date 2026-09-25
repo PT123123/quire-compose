@@ -1,0 +1,6 @@
+* text=auto
+*.png binary
+*.jar binary
+*.keystore binary
+gradlew text eol=lf
+*.bat text eol=crlf
