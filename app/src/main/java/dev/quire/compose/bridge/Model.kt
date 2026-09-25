@@ -75,9 +75,83 @@ data class View(
     val favorites: List<Long>,
     val canUndo: Boolean,
     val canRedo: Boolean,
+    /** The same two answers for the organizer's own stack. Two stacks, two pairs. */
+    val orgCanUndo: Boolean,
+    val orgCanRedo: Boolean,
     val notice: String?,
     val pageCount: Int,
+    /**
+     * SPEC §四十一's whole catalog. Rows only — the five smart views, the three
+     * sorts and the row badges are derived in `ui/OrgModel.kt`, which is what
+     * keeps typing in a search box off the bridge.
+     */
+    val org: OrgCatalog,
 )
+
+// ─── the organizer's rows ───────────────────────────────────────────────────
+//
+// The core's own rows, not a view: `ui/OrgModel.kt` is where they become a
+// screen. Every field is here because a screen draws it or a write needs it, and
+// the two enums travel as the short stable strings the database stores
+// (`Priority::as_str`) so no second vocabulary exists for the same fact.
+
+data class OrgNote(
+    val id: Long,
+    val title: String,
+    val body: String,
+    val pinned: Boolean,
+    val tags: List<String>,
+    val created: Long,
+    val edited: Long,
+)
+
+data class OrgSubtask(
+    val id: Long,
+    val title: String,
+    val done: Boolean,
+)
+
+data class OrgTask(
+    val id: Long,
+    /** `0` is the inbox — a sentinel, not a row. */
+    val list: Long,
+    val title: String,
+    val notes: String,
+    /** `none` | `low` | `medium` | `high`. */
+    val priority: String,
+    /** `YYYY-MM-DD`, or null. A date, not an instant. */
+    val due: String?,
+    /** `none` | `daily` | `weekdays` | `weekly` | `monthly`. */
+    val repeat: String,
+    val done: Boolean,
+    val completedAt: Long?,
+    val tags: List<String>,
+    val subtasks: List<OrgSubtask>,
+    val created: Long,
+    val edited: Long,
+    /** Reading order inside the list: the "添加顺序" sort is these two numbers. */
+    val ord: Long,
+)
+
+data class OrgList(
+    val id: Long,
+    val name: String,
+    /** Palette slot: 0 = the theme default, 1..9 = gray..red. */
+    val color: Int,
+    val ord: Long,
+)
+
+/** One reply's worth of the organizer. */
+data class OrgCatalog(
+    val notes: List<OrgNote>,
+    val tasks: List<OrgTask>,
+    /** The stored lists; the inbox has no row and is a chip the UI builds. */
+    val lists: List<OrgList>,
+) {
+    companion object {
+        val Empty = OrgCatalog(emptyList(), emptyList(), emptyList())
+    }
+}
 
 /** What one call answered. */
 sealed interface Reply {
@@ -118,8 +192,11 @@ private fun parseView(json: JSONObject): View = View(
     favorites = json.getJSONArray("favorites").longs(),
     canUndo = json.optBoolean("canUndo"),
     canRedo = json.optBoolean("canRedo"),
+    orgCanUndo = json.optBoolean("orgCanUndo"),
+    orgCanRedo = json.optBoolean("orgCanRedo"),
     notice = if (json.isNull("notice")) null else json.optString("notice").ifEmpty { null },
     pageCount = json.optInt("pageCount"),
+    org = json.optJSONObject("org")?.let(::parseOrg) ?: OrgCatalog.Empty,
 )
 
 private fun parsePage(json: JSONObject) = PageRow(
@@ -160,6 +237,54 @@ private fun parseMark(json: JSONObject) = MarkRow(
     url = json.optString("url"),
 )
 
+private fun parseOrg(json: JSONObject) = OrgCatalog(
+    notes = json.getJSONArray("notes").mapObjects(::parseNote),
+    tasks = json.getJSONArray("tasks").mapObjects(::parseTask),
+    lists = json.getJSONArray("lists").mapObjects(::parseList),
+)
+
+private fun parseNote(json: JSONObject) = OrgNote(
+    id = json.getLong("id"),
+    title = json.optString("title"),
+    body = json.optString("body"),
+    pinned = json.optBoolean("pinned"),
+    tags = json.getJSONArray("tags").strings(),
+    created = json.optLong("created"),
+    edited = json.optLong("edited"),
+)
+
+private fun parseTask(json: JSONObject) = OrgTask(
+    id = json.getLong("id"),
+    list = json.optLong("list"),
+    title = json.optString("title"),
+    notes = json.optString("notes"),
+    priority = json.optString("priority", "none"),
+    // An absent deadline is no deadline — the empty string would be two spellings
+    // of one state.
+    due = if (json.isNull("due")) null else json.optString("due").ifEmpty { null },
+    repeat = json.optString("repeat", "none"),
+    done = json.optBoolean("done"),
+    completedAt = json.longOrNull("completedAt"),
+    tags = json.getJSONArray("tags").strings(),
+    subtasks = json.getJSONArray("subtasks").mapObjects(::parseSubtask),
+    created = json.optLong("created"),
+    edited = json.optLong("edited"),
+    ord = json.optLong("ord"),
+)
+
+private fun parseSubtask(json: JSONObject) = OrgSubtask(
+    id = json.getLong("id"),
+    title = json.optString("title"),
+    done = json.optBoolean("done"),
+)
+
+private fun parseList(json: JSONObject) = OrgList(
+    id = json.getLong("id"),
+    name = json.optString("name"),
+    color = json.optInt("color"),
+    ord = json.optLong("ord"),
+)
+
 private fun JSONObject.longOrNull(name: String): Long? =
     if (isNull(name)) null else getLong(name)
 
@@ -167,3 +292,5 @@ private fun <T> JSONArray.mapObjects(parse: (JSONObject) -> T): List<T> =
     (0 until length()).map { parse(getJSONObject(it)) }
 
 private fun JSONArray.longs(): List<Long> = (0 until length()).map { getLong(it) }
+
+private fun JSONArray.strings(): List<String> = (0 until length()).map { optString(it) }

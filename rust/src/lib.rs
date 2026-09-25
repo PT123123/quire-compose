@@ -25,6 +25,7 @@
 //!   catches it and returns `{"ok":false,"error":…}` — a note the shell can
 //!   show beats an app that disappears.
 
+mod org;
 mod session;
 mod view;
 mod workspace;

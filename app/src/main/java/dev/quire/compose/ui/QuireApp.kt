@@ -1,5 +1,6 @@
 package dev.quire.compose.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -92,6 +93,13 @@ private fun StartupScreen(error: String?) {
     }
 }
 
+/**
+ * Which of the two top-level areas is on screen. SPEC §四十一 gives the shell
+ * exactly two, and the document is not destroyed by leaving it — a page opened on
+ * the way into 笔记 is still open on the way back.
+ */
+private enum class Area { Pages, Organizer }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun Shell(view: View, vm: QuireViewModel) {
@@ -108,6 +116,21 @@ private fun Shell(view: View, vm: QuireViewModel) {
     var deleteFor by remember { mutableStateOf<Long?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
 
+    // SPEC §四十一's second top-level area. The document is not *replaced* — it
+    // stays exactly where it was, and switching back finds it there (ADR-0013).
+    var area by remember { mutableStateOf(Area.Pages) }
+    val inOrganizerDetail = area == Area.Organizer && organizerInDetail(vm)
+
+    // The back gesture, in the order a touch user expects: leave the open row's
+    // form, then leave the area, and only then let the system have it. A phone has
+    // no other way to a "up one level".
+    BackHandler(enabled = area == Area.Organizer) {
+        when {
+            inOrganizerDetail -> vm.orgSelectRow(-1)
+            else -> area = Area.Pages
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -120,6 +143,11 @@ private fun Shell(view: View, vm: QuireViewModel) {
                     view = view,
                     vm = vm,
                     onPageMenu = { pageMenuFor = it },
+                    onOpenOrganizer = { tab ->
+                        scope.launch { drawerState.close() }
+                        vm.openOrganizer(tab)
+                        area = Area.Organizer
+                    },
                     onOpenSettings = {
                         scope.launch { drawerState.close() }
                         settingsOpen = true
@@ -131,17 +159,25 @@ private fun Shell(view: View, vm: QuireViewModel) {
         Scaffold(
             containerColor = colors.background,
             topBar = {
-                TopBar(
-                    view = view,
-                    vm = vm,
-                    onOpenDrawer = { scope.launch { drawerState.open() } },
-                )
+                if (area == Area.Organizer) {
+                    OrganizerBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
+                } else {
+                    TopBar(
+                        view = view,
+                        vm = vm,
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                    )
+                }
             },
         ) { padding ->
             Column(modifier = Modifier.padding(padding)) {
                 vm.notice?.let { NoticeBar(it, vm::dismissNotice) }
                 vm.error?.let { ErrorBar(it, vm::dismissError) }
-                EditorScreen(view = view, vm = vm, onBlockMenu = { blockMenuFor = it })
+                if (area == Area.Organizer) {
+                    OrganizerScreen(vm = vm)
+                } else {
+                    EditorScreen(view = view, vm = vm, onBlockMenu = { blockMenuFor = it })
+                }
             }
         }
     }

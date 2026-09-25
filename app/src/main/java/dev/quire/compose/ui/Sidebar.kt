@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
@@ -29,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,6 +53,7 @@ fun Sidebar(
     view: View,
     vm: QuireViewModel,
     onPageMenu: (Long) -> Unit,
+    onOpenOrganizer: (Int) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val colors = LocalQuireColors.current
@@ -70,6 +74,13 @@ fun Sidebar(
                 color = colors.textMuted,
             )
         }
+
+        // SPEC §四十一: the way into the second area, in the same place the desktop
+        // shell keeps it — two rows under the header, above the tree. They are "go
+        // somewhere", not commands, which is why neither carries a shortcut hint.
+        SidebarAction(label = "笔记", icon = Icons.Default.Edit, onClick = { onOpenOrganizer(0) })
+        SidebarAction(label = "任务", icon = Icons.Default.CheckCircle, onClick = { onOpenOrganizer(1) })
+        HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
         LazyColumn(modifier = Modifier.weight(1f)) {
             item(key = "new-page") {
@@ -192,7 +203,7 @@ private fun PageTreeRow(
 }
 
 @Composable
-private fun SidebarAction(label: String, onClick: () -> Unit) {
+private fun SidebarAction(label: String, icon: ImageVector = Icons.Default.Add, onClick: () -> Unit) {
     val colors = LocalQuireColors.current
     Row(
         modifier = Modifier
@@ -205,7 +216,7 @@ private fun SidebarAction(label: String, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(Icons.Default.Add, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(18.dp))
         Text(label, style = QuireType.ui, color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

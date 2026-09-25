@@ -13,6 +13,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
+use quire_core::core::organizer::OrganizerCatalog;
+use quire_core::core::types::ColorKind;
 use quire_core::core::{Block, BlockId, Document, PageId};
 
 use crate::workspace::Workspace;
@@ -97,10 +99,156 @@ pub struct View {
     /// button's enabled state needs — pressing it when it lies is a no-op.
     pub can_undo: bool,
     pub can_redo: bool,
+    /// The same two answers for the organizer's own stack. Separate fields
+    /// because the two stacks are separate: a step in the area must not light the
+    /// editor's button, and neither may a page's edit light the area's.
+    pub org_can_undo: bool,
+    pub org_can_redo: bool,
     /// A startup notice worth showing once (recovered-from-backup, a moved
     /// library). `None` on an ordinary start.
     pub notice: Option<String>,
     pub page_count: usize,
+    /// SPEC §四十一's whole catalog — notes, tasks, lists — for the Compose side
+    /// to project. Rows only, no derived view: the five smart views, the three
+    /// sorts and the row badges are computed in Kotlin from this, which is what
+    /// keeps a filter change off the bridge entirely.
+    pub org: OrgCatalog,
+}
+
+/// The organizer's catalog as the wire carries it. Not a mirror of the core's
+/// types: a list's colour travels as its **palette slot** (an `i32` the UI
+/// already knows how to paint, and the same number the write side hands back),
+/// and nothing that only the store cares about is sent.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgCatalog {
+    pub notes: Vec<OrgNoteRow>,
+    pub tasks: Vec<OrgTaskRow>,
+    /// The stored lists, inbox excluded — the inbox is a sentinel with no row
+    /// (`ListId::INBOX`), so a chip for it is a projection the UI builds.
+    pub lists: Vec<OrgListRow>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgNoteRow {
+    pub id: u64,
+    pub title: String,
+    pub body: String,
+    pub pinned: bool,
+    pub tags: Vec<String>,
+    pub created: i64,
+    pub edited: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgSubtaskRow {
+    pub id: u64,
+    pub title: String,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgTaskRow {
+    pub id: u64,
+    /// The list it belongs to. `0` is the inbox — a sentinel, not a row, and the
+    /// read side folds a task whose list is gone to the inbox the same way.
+    pub list: u64,
+    pub title: String,
+    pub notes: String,
+    /// `none` | `low` | `medium` | `high`, `Priority::as_str`'s own spelling, so
+    /// the picker's order and the stored string cannot drift apart.
+    pub priority: String,
+    /// `YYYY-MM-DD`, or absent. A date and not an instant: "due Friday" is what
+    /// the user meant, and a timestamp would make one list read differently in
+    /// another zone.
+    pub due: Option<String>,
+    /// `none` | `daily` | `weekdays` | `weekly` | `monthly`.
+    pub repeat: String,
+    pub done: bool,
+    pub completed_at: Option<i64>,
+    pub tags: Vec<String>,
+    pub subtasks: Vec<OrgSubtaskRow>,
+    pub created: i64,
+    pub edited: i64,
+    /// Reading order inside the list — a dense key, so the "added order" sort is
+    /// a comparison of two numbers.
+    pub ord: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgListRow {
+    pub id: u64,
+    pub name: String,
+    pub color: i32,
+    pub ord: u64,
+}
+
+/// The organizer's catalog, projected. One function, no filtering and no
+/// sorting: which rows a screen shows is the shell app layer's question, and for
+/// this shell that layer is Kotlin.
+pub fn org_catalog(org: &OrganizerCatalog) -> OrgCatalog {
+    OrgCatalog {
+        notes: org
+            .notes
+            .iter()
+            .map(|n| OrgNoteRow {
+                id: n.id.0,
+                title: n.title.clone(),
+                body: n.body.clone(),
+                pinned: n.pinned,
+                tags: n.tags.clone(),
+                created: n.created,
+                edited: n.edited,
+            })
+            .collect(),
+        tasks: org
+            .tasks
+            .iter()
+            .map(|t| OrgTaskRow {
+                id: t.id.0,
+                list: t.list.0,
+                title: t.title.clone(),
+                notes: t.notes.clone(),
+                priority: t.priority.as_str().to_string(),
+                due: t.due.clone(),
+                repeat: t.repeat.as_str().to_string(),
+                done: t.done,
+                completed_at: t.completed_at,
+                tags: t.tags.clone(),
+                subtasks: t
+                    .subtasks
+                    .iter()
+                    .map(|s| OrgSubtaskRow {
+                        id: s.id,
+                        title: s.title.clone(),
+                        done: s.done,
+                    })
+                    .collect(),
+                created: t.created,
+                edited: t.edited,
+                ord: t.ord.0,
+            })
+            .collect(),
+        lists: org
+            .lists
+            .iter()
+            .map(|l| OrgListRow {
+                id: l.id.0,
+                name: l.name.clone(),
+                // A spelling this build cannot name reads as the theme default
+                // rather than failing the projection — the fold the store makes
+                // for the same string.
+                color: ColorKind::try_from_str(l.color.as_str())
+                    .unwrap_or(ColorKind::Default)
+                    .slot(),
+                ord: l.ord.0,
+            })
+            .collect(),
+    }
 }
 
 /// The sidebar's rows: the tree's expanded branches, in order.

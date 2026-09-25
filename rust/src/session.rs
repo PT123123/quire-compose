@@ -32,6 +32,7 @@ use quire_core::services::persistence::PersistenceService;
 use quire_core::services::settings_store::Settings;
 use quire_core::storage::SqliteRepository;
 
+use crate::org::Organizer;
 use crate::view::{self, View};
 use crate::workspace::{PageRec, Workspace, MAX_RECENTS};
 
@@ -132,6 +133,131 @@ pub enum Request {
     },
     Undo,
     Redo,
+
+    // ─── SPEC §四十一: notes and tasks ───────────────────────────────────────
+    //
+    // The area's writes, one arm per thing the UI can do. They are *not* the
+    // core's `Command` enum spelled in JSON: a request names a row and the value
+    // it now has, and `org.rs` reads the row's previous state out of the catalog
+    // it holds — the plan has no store to read from. The high-level shape is what
+    // keeps the Kotlin side from having to mirror nine change variants and an
+    // ordering rule; it sends intent, and the session decides what that means.
+    /// A new, empty note. The id is the session's to allocate.
+    OrgCreateNote,
+    OrgNoteTitle {
+        note: i64,
+        title: String,
+    },
+    OrgNoteBody {
+        note: i64,
+        body: String,
+    },
+    OrgNotePinned {
+        note: i64,
+        pinned: bool,
+    },
+    /// Comma-separated, parsed on this side so one place decides what the input
+    /// means.
+    OrgNoteTags {
+        note: i64,
+        tags: String,
+    },
+    OrgDeleteNote {
+        note: i64,
+    },
+
+    /// A new, empty task in `list` (`-1` = the inbox).
+    OrgCreateTask {
+        list: i64,
+    },
+    /// The quick-add line: create and title in one step, and set the deadline
+    /// when `due` is given (the 今天 view types a task that is due today).
+    OrgQuickAdd {
+        list: i64,
+        title: String,
+        #[serde(default)]
+        due: Option<String>,
+    },
+    OrgTaskTitle {
+        task: i64,
+        title: String,
+    },
+    OrgTaskNotes {
+        task: i64,
+        notes: String,
+    },
+    OrgTaskDone {
+        task: i64,
+        done: bool,
+    },
+    /// The priority menu's slot — the position in `Priority::ALL`.
+    OrgTaskPriority {
+        task: i64,
+        slot: i32,
+    },
+    /// `YYYY-MM-DD`, or `""` for none.
+    OrgTaskDue {
+        task: i64,
+        due: String,
+    },
+    /// The repeat menu's slot — the position in `Repeat::ALL`.
+    OrgTaskRepeat {
+        task: i64,
+        slot: i32,
+    },
+    OrgTaskTags {
+        task: i64,
+        tags: String,
+    },
+    /// Move a task to another list (`-1` = the inbox). The board's cross-column
+    /// drop and the row menu's 移到 both land here.
+    OrgTaskList {
+        task: i64,
+        list: i64,
+    },
+    OrgDeleteTask {
+        task: i64,
+    },
+
+    OrgSubtaskAdd {
+        task: i64,
+    },
+    OrgSubtaskTitle {
+        task: i64,
+        subtask: i64,
+        title: String,
+    },
+    OrgSubtaskDone {
+        task: i64,
+        subtask: i64,
+        done: bool,
+    },
+    OrgSubtaskDelete {
+        task: i64,
+        subtask: i64,
+    },
+
+    /// A new list. A blank name becomes 新建清单, as it does on the desktop.
+    OrgCreateList {
+        #[serde(default)]
+        name: String,
+    },
+    OrgListName {
+        list: i64,
+        name: String,
+    },
+    /// The chip's colour dot, by palette slot.
+    OrgListColor {
+        list: i64,
+        slot: i32,
+    },
+    /// Delete a list and file its tasks in the inbox, in one undoable step.
+    OrgDeleteList {
+        list: i64,
+    },
+    /// Walk the area's own stack — never the open page's.
+    OrgUndo,
+    OrgRedo,
 }
 
 /// Whether a reply carries the full view.
@@ -155,6 +281,11 @@ pub struct Session {
     doc: Document,
     hist: History,
     ws: Workspace,
+    /// SPEC §四十一's area: the catalog, its id watermarks, and the area's own
+    /// undo bookkeeping. Held here rather than in Kotlin because the writes need
+    /// it — `Command::Update*` is handed the row *before* and the row *after*, and
+    /// only the owner of the catalog has the first of those.
+    org: Organizer,
     settings: Settings,
     active: Option<PageId>,
     theme: String,
@@ -210,6 +341,14 @@ impl Session {
             notice = Some("资料库已移至用户配置目录".to_string());
         }
 
+        // SPEC §四十一's catalog, read whole beside the pages. A failure here is
+        // not a failure to open: the pages half still works, and the honest answer
+        // is an area that draws nothing plus the reason in the notice bar.
+        let (org, org_notice) = Organizer::load(&repo);
+        if notice.is_none() {
+            notice = org_notice;
+        }
+
         let repo = Arc::new(repo);
         let persistence =
             PersistenceService::with_default_clock(repo.clone()).with_database_snapshots(&repo);
@@ -220,6 +359,7 @@ impl Session {
             doc,
             hist: History::default(),
             ws,
+            org,
             settings,
             active,
             theme,
@@ -279,8 +419,11 @@ impl Session {
             favorites: self.ws.favorites().into_iter().map(|p| p.0).collect(),
             can_undo: self.can_undo,
             can_redo: self.can_redo,
+            org_can_undo: self.org.can_undo(),
+            org_can_redo: self.org.can_redo(),
             notice: self.notice.clone(),
             page_count: self.ws.len(),
+            org: view::org_catalog(self.org.catalog()),
         }
     }
 
@@ -348,7 +491,126 @@ impl Session {
             }
             Request::Undo => self.walk_history(true),
             Request::Redo => self.walk_history(false),
+
+            // ─── SPEC §四十一 ────────────────────────────────────────────────
+            //
+            // Every one of these answers with the whole view. That is not the
+            // cheap answer — an organizer edit echoes the catalog back, and a
+            // catalog is a few hundred rows — but it is the *correct* one: the row
+            // the user just typed into has a new `edited` instant this side
+            // stamped, a smart view may have gained or lost the task, and the
+            // counts in the chips moved. The Kotlin side debounces the two fields
+            // a person types into, which is what keeps that cost off the keystroke
+            // path.
+            Request::OrgCreateNote => {
+                self.org_op(|org, doc, hist| org.create_note(doc, hist))
+            }
+            Request::OrgNoteTitle { note, title } => {
+                self.org_op(|org, doc, hist| org.note_title(doc, hist, note, title))
+            }
+            Request::OrgNoteBody { note, body } => {
+                self.org_op(|org, doc, hist| org.note_body(doc, hist, note, body))
+            }
+            Request::OrgNotePinned { note, pinned } => {
+                self.org_op(|org, doc, hist| org.note_pinned(doc, hist, note, pinned))
+            }
+            Request::OrgNoteTags { note, tags } => {
+                self.org_op(|org, doc, hist| org.note_tags(doc, hist, note, tags))
+            }
+            Request::OrgDeleteNote { note } => {
+                self.org_op(|org, doc, hist| org.delete_note(doc, hist, note))
+            }
+            Request::OrgCreateTask { list } => {
+                self.org_op(|org, doc, hist| org.create_task(doc, hist, list))
+            }
+            Request::OrgQuickAdd { list, title, due } => {
+                self.org_op(|org, doc, hist| org.quick_add(doc, hist, list, title, due))
+            }
+            Request::OrgTaskTitle { task, title } => {
+                self.org_op(|org, doc, hist| org.task_title(doc, hist, task, title))
+            }
+            Request::OrgTaskNotes { task, notes } => {
+                self.org_op(|org, doc, hist| org.task_notes(doc, hist, task, notes))
+            }
+            Request::OrgTaskDone { task, done } => {
+                self.org_op(|org, doc, hist| org.task_done(doc, hist, task, done))
+            }
+            Request::OrgTaskPriority { task, slot } => {
+                self.org_op(|org, doc, hist| org.task_priority(doc, hist, task, slot))
+            }
+            Request::OrgTaskDue { task, due } => {
+                self.org_op(|org, doc, hist| org.task_due(doc, hist, task, due))
+            }
+            Request::OrgTaskRepeat { task, slot } => {
+                self.org_op(|org, doc, hist| org.task_repeat(doc, hist, task, slot))
+            }
+            Request::OrgTaskTags { task, tags } => {
+                self.org_op(|org, doc, hist| org.task_tags(doc, hist, task, tags))
+            }
+            Request::OrgTaskList { task, list } => {
+                self.org_op(|org, doc, hist| org.task_list(doc, hist, task, list))
+            }
+            Request::OrgDeleteTask { task } => {
+                self.org_op(|org, doc, hist| org.delete_task(doc, hist, task))
+            }
+            Request::OrgSubtaskAdd { task } => {
+                self.org_op(|org, doc, hist| org.subtask_add(doc, hist, task))
+            }
+            Request::OrgSubtaskTitle { task, subtask, title } => self.org_op(|org, doc, hist| {
+                org.subtask_title(doc, hist, task, subtask, title)
+            }),
+            Request::OrgSubtaskDone { task, subtask, done } => self.org_op(|org, doc, hist| {
+                org.subtask_done(doc, hist, task, subtask, done)
+            }),
+            Request::OrgSubtaskDelete { task, subtask } => self.org_op(|org, doc, hist| {
+                org.subtask_delete(doc, hist, task, subtask)
+            }),
+            Request::OrgCreateList { name } => {
+                self.org_op(|org, doc, hist| org.create_list(doc, hist, name))
+            }
+            Request::OrgListName { list, name } => {
+                self.org_op(|org, doc, hist| org.list_name(doc, hist, list, name))
+            }
+            Request::OrgListColor { list, slot } => {
+                self.org_op(|org, doc, hist| org.list_color(doc, hist, list, slot))
+            }
+            Request::OrgDeleteList { list } => {
+                self.org_op(|org, doc, hist| org.delete_list(doc, hist, list))
+            }
+            Request::OrgUndo => self.walk_org_history(true),
+            Request::OrgRedo => self.walk_org_history(false),
         }
+    }
+
+    /// One organizer write: run it, hand the changes it planned to the writer, and
+    /// answer with the whole view.
+    ///
+    /// The three borrows are disjoint fields, which is why this can be one closure
+    /// rather than three accessor methods on `Session`.
+    fn org_op(
+        &mut self,
+        op: impl FnOnce(&mut Organizer, &mut Document, &mut History) -> Result<Vec<Change>, String>,
+    ) -> Result<Outcome, String> {
+        let changes = op(&mut self.org, &mut self.doc, &mut self.hist)?;
+        self.record(changes);
+        Ok(Outcome::Full)
+    }
+
+    /// Undo or redo inside the area — always [`ORGANIZER_STACK`], never the open
+    /// page's, so a step here cannot reach a document edit and vice versa.
+    fn walk_org_history(&mut self, undo: bool) -> Result<Outcome, String> {
+        let changes = if undo {
+            self.org.undo(&mut self.doc, &mut self.hist)
+        } else {
+            self.org.redo(&mut self.doc, &mut self.hist)
+        };
+        match changes {
+            Some(changes) => self.record(changes),
+            // Nothing left in that direction: the step must not be remembered as
+            // having happened, or the button stays lit over an empty stack.
+            None => self.org.set_exhausted(undo),
+        }
+        Ok(Outcome::Full)
     }
 
     /// Run one command against the page that owns `block`.

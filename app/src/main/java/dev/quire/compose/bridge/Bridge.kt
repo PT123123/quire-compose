@@ -86,6 +86,98 @@ class Bridge(private val handle: Long) {
 
     fun redo(): Reply = send("redo")
 
+    // ─── SPEC §四十一: notes and tasks ──────────────────────────────────────
+    //
+    // Every one of these answers with the whole view, because an organizer edit
+    // moves things the UI cannot predict: the row's `edited` instant (stamped on
+    // the Rust side), which smart views the row belongs to now, and the counts in
+    // the chips. The Kotlin side debounces the two fields a person types into, so
+    // a keystroke does not pay for that.
+
+    fun orgCreateNote(): Reply = send("orgCreateNote")
+
+    fun orgNoteTitle(note: Long, title: String): Reply =
+        send("orgNoteTitle", "note" to note, "title" to title)
+
+    fun orgNoteBody(note: Long, body: String): Reply =
+        send("orgNoteBody", "note" to note, "body" to body)
+
+    fun orgNotePinned(note: Long, pinned: Boolean): Reply =
+        send("orgNotePinned", "note" to note, "pinned" to pinned)
+
+    /** Comma-separated; the split is decided on the Rust side, once. */
+    fun orgNoteTags(note: Long, tags: String): Reply =
+        send("orgNoteTags", "note" to note, "tags" to tags)
+
+    fun orgDeleteNote(note: Long): Reply = send("orgDeleteNote", "note" to note)
+
+    /** A new, empty task in `list`; `-1` is the inbox. */
+    fun orgCreateTask(list: Long): Reply = send("orgCreateTask", "list" to list)
+
+    /**
+     * The quick-add line. `due` is the ISO date the line was typed into when it
+     * was typed into 今天, and null otherwise.
+     */
+    fun orgQuickAdd(list: Long, title: String, due: String? = null): Reply =
+        send("orgQuickAdd", "list" to list, "title" to title, "due" to due)
+
+    fun orgTaskTitle(task: Long, title: String): Reply =
+        send("orgTaskTitle", "task" to task, "title" to title)
+
+    fun orgTaskNotes(task: Long, notes: String): Reply =
+        send("orgTaskNotes", "task" to task, "notes" to notes)
+
+    fun orgTaskDone(task: Long, done: Boolean): Reply =
+        send("orgTaskDone", "task" to task, "done" to done)
+
+    /** The priority menu's slot — the position in `Priority::ALL` (无·低·中·高). */
+    fun orgTaskPriority(task: Long, slot: Int): Reply =
+        send("orgTaskPriority", "task" to task, "slot" to slot)
+
+    /** `YYYY-MM-DD`, or `""` to clear it. */
+    fun orgTaskDue(task: Long, due: String): Reply =
+        send("orgTaskDue", "task" to task, "due" to due)
+
+    /** The repeat menu's slot — the position in `Repeat::ALL`. */
+    fun orgTaskRepeat(task: Long, slot: Int): Reply =
+        send("orgTaskRepeat", "task" to task, "slot" to slot)
+
+    fun orgTaskTags(task: Long, tags: String): Reply =
+        send("orgTaskTags", "task" to task, "tags" to tags)
+
+    /** Move a task to another list; `-1` is the inbox. */
+    fun orgTaskList(task: Long, list: Long): Reply =
+        send("orgTaskList", "task" to task, "list" to list)
+
+    fun orgDeleteTask(task: Long): Reply = send("orgDeleteTask", "task" to task)
+
+    fun orgSubtaskAdd(task: Long): Reply = send("orgSubtaskAdd", "task" to task)
+
+    fun orgSubtaskTitle(task: Long, subtask: Long, title: String): Reply =
+        send("orgSubtaskTitle", "task" to task, "subtask" to subtask, "title" to title)
+
+    fun orgSubtaskDone(task: Long, subtask: Long, done: Boolean): Reply =
+        send("orgSubtaskDone", "task" to task, "subtask" to subtask, "done" to done)
+
+    fun orgSubtaskDelete(task: Long, subtask: Long): Reply =
+        send("orgSubtaskDelete", "task" to task, "subtask" to subtask)
+
+    fun orgCreateList(name: String): Reply = send("orgCreateList", "name" to name)
+
+    fun orgListName(list: Long, name: String): Reply =
+        send("orgListName", "list" to list, "name" to name)
+
+    /** The chip's colour dot, by palette slot. */
+    fun orgListColor(list: Long, slot: Int): Reply =
+        send("orgListColor", "list" to list, "slot" to slot)
+
+    fun orgDeleteList(list: Long): Reply = send("orgDeleteList", "list" to list)
+
+    /** The area's own stack — never the open page's. */
+    fun orgUndo(): Reply = send("orgUndo")
+
+    fun orgRedo(): Reply = send("orgRedo")
+
     /** Flush and free the native session. After this the handle is dead. */
     fun close() = Native.close(handle)
 
