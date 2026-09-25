@@ -151,3 +151,36 @@ Consequences: this version is deliberately smaller than the other two — no ben
 pages, no templates, no covers, no search blob. What it does keep is the *format*
 of the persisted state, so the three shells agree about the library even though
 three copies of the code now decide how to walk it.
+
+## ADR-0001 · JSON over four JNI symbols, not UniFFI and not a symbol per operation
+
+Decision: the Kotlin shell talks to Rust through exactly four exported symbols —
+create, open, dispatch, close — and `dispatch` carries one JSON request and
+returns one JSON reply. There is no generated binding layer.
+
+Why: the core has no FFI at all (no `uniffi`, no `jni`, no `extern "C"`), because
+its rule is that nothing under its `src/` may know about a consumer — so whatever
+crosses the boundary is this repository's to invent, and the two obvious
+alternatives each cost something real.
+
+*A symbol per operation* puts half the protocol in Rust function signatures and
+half in Kotlin ones, and every field, every rename and every new operation
+touches both sides and neither compiler sees the other. One string each way keeps
+the whole contract in `session.rs`, where it is covered by `cargo test` on the
+host, with no emulator and no JVM.
+
+*UniFFI* is the industry answer for this shape and was seriously considered. Two
+things ruled it out here. Its Kotlin bindings reach the native side through JNA:
+a second marshalling layer, a reflection-based dependency, and a runtime cost
+under a UI whose specification ranks low RAM above maintainability and feature
+count. And its `#[uniffi::export]` derives would have to go on the shared crate's
+model types — the `Block` and `Command` enums — which is exactly the direction the
+core's rule forbids.
+
+Consequences: the request and reply shapes are hand-written on both sides, and
+the Kotlin half parses with `org.json` rather than a serialization library (flat
+payloads, one file, no compiler plugin). A payload that grows beyond what
+`org.json` handles pleasantly is the signal to revisit this, not a reason to
+pre-decide it. The one operation whose reply shape differs from the others —
+`setBlockText`, which answers with nothing — is called out in ADR-0003.
+
