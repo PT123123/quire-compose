@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.1 — the workshop deploy, and the local copy of a release
+
+`just deploy-workshop` (ADR-0017): bump the patch, build the signed release APK,
+commit and push the bump, then copy the APK to
+`C:\workshop\quire-compose-<version>\quire-compose-<version>.apk` — the user's own
+drop zone, which holds one folder per release of several applications
+(`aura-1.2.6`, `aw-qtui-0.1.36`, `quire-desktop-0.1.4`).
+
+- The **local** door a release leaves by, beside `just release-publish`, which is
+  the door Obtainium installs from. Each advances the version, so they are two
+  independent acts rather than two halves of one.
+- The APK is verified **signed** (`apksigner verify --print-certs`) before it is
+  copied. The keystore lives in the user's own directory, outside this repository,
+  and without it the build yields an *unsigned* release APK — which installs
+  nowhere, and the workshop is where one gets picked up from.
+- The folder name carries the shell (`quire-compose-`, not a bare `quire-`): the
+  drop zone holds several applications and this family has two Android shells in
+  it. The file inside keeps the name the GitHub release uses, so the local copy and
+  the published asset are the same name over the same bytes.
+
 ## 0.5.0 — 同步: the shell's half of the LAN protocol, and a page to drive it
 
 `quire-core` has shipped the whole sync protocol since the beginning of this

@@ -4,6 +4,57 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0017 · The local delivery is a workshop deploy, and it advances the version
+
+Decision: `scripts/deploy-workshop.ps1` (`just deploy-workshop`) bumps
+`quire.version`'s patch, builds the signed release APK, commits and pushes that
+bump, and copies the APK to
+`C:\workshop\quire-compose-<version>\quire-compose-<version>.apk`. The GitHub
+publish (`just release-publish`) is unchanged and remains the delivery Obtainium
+follows. The two are independent acts, and each one advances the version.
+
+Why a second delivery at all. The workshop is the user's own drop zone: one folder
+per release, named `<name>-<version>` (`aura-1.2.6`, `aw-qtui-0.1.36`,
+`quire-desktop-0.1.4`), and the desktop shell has deployed into it since its
+ADR-0105. Until now the Android shells could only publish, which left the build on
+this machine and the build a release names identical by luck — and the APK a phone
+is installed from is too useful to live only in
+`app\build\outputs\apk\release\`.
+
+Why the deploy bumps, rather than archiving whatever version is current. It is the
+desktop deploy's reason in this repository's vocabulary: the folder is named after
+the version, so a deploy that did not bump would be a second, different build
+silently overwriting the previous release's folder, and the drop zone could no
+longer say what was built when. The bump is also the only thing that gets
+committed, which is what lets the folder keep saying what it was built from.
+Accepted with it: deploying and then publishing moves the version twice, exactly
+as it does on the desktop side.
+
+The file inside keeps the release's own name — `quire-compose-<version>.apk` — so
+the local copy and the published asset are the same file name over the same bytes,
+and either one still identifies its release after being copied out to a phone. The
+folder name carries the shell because the drop zone holds several applications and
+this family has two Android shells in it (this one and `quire-droid`); a bare
+`quire-<version>` would be a name to guess at, which is the argument the desktop
+shell's folder name already makes.
+
+Consequences:
+
+- The copy is the **last** step. The bump, the build, the signature check and the
+  push all happen before it, so a build or a push that failed leaves no folder
+  behind claiming a version that never landed.
+- The APK is verified signed before the copy (`apksigner verify --print-certs` —
+  the check ADR-0009's publish makes). A missing keystore, which lives in the
+  user's own directory and outside this repository, yields an *unsigned* release
+  APK that installs nowhere, and the workshop is where one gets picked up from.
+- No check against the APK's own `versionName`, unlike the desktop deploy's look at
+  the exe's version resource: `gradle.properties` is a configuration input Gradle
+  re-reads on every configure, and the script reads the bumped value back before
+  building, so the folder's name and the APK's versionName cannot disagree. The
+  failure that would be *silent* is the unsigned one, and that is the one checked.
+- `quire-droid`, the Slint Android shell, has no workshop deploy and this ADR does
+  not give it one — that is a decision for that repository.
+
 ## ADR-0016 · 同步 is a destination, and a library this build cannot carry refuses to sync at all
 
 Decision: LAN sync gets a **page** — a fourth drawer row, `ui/Sync.kt` — over
@@ -67,7 +118,7 @@ Consequences:
   library carried between shells keeps its peer book, its identity and its
   shadows.
 
-
+## ADR-0015 · 收件箱 as home, an instant capture, undo-able deletes, and 引用
 
 Decision: four changes to the organizer, each one a thing the reference app does
 and this shell did not.

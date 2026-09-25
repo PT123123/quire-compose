@@ -34,6 +34,14 @@ install:
 release-publish:
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-publish.ps1
 
+# The *other* door a release leaves by: bump the patch, build the signed APK, and
+# put it in C:\workshop\quire-compose-<version> — the user's own drop zone, one
+# folder per release. Same steps as release-publish minus GitHub, and it advances
+# the version the same way, because the folder is named after the version: the
+# two are independent acts, and neither is an alternative to the other.
+deploy-workshop:
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-workshop.ps1
+
 # Remove every build output, on both sides of the bridge.
 clean:
     cargo clean --manifest-path rust/Cargo.toml

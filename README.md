@@ -73,6 +73,7 @@ just check            # bridge tests + app unit tests + a debug APK
 just install          # debug APK onto the connected device, data preserved
 just android-apk      # the signed release APK
 just release-publish  # bump the patch, build, push, publish (Obtainium's source)
+just deploy-workshop  # bump the patch, build, deploy to C:\workshop (the local copy)
 ```
 
 Machine-local files: `local.properties` (the SDK path, gitignored).
