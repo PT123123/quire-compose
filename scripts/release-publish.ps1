@@ -25,9 +25,6 @@ $root = (Get-Location).Path
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw "gh is not on PATH — install the GitHub CLI and 'gh auth login' first"
 }
-if (-not (Test-Path (Join-Path $root 'keystore.properties'))) {
-    throw "keystore.properties is missing — a release signed with a different key cannot install over the last one"
-}
 
 # ── 1: the bump ─────────────────────────────────────────────────────────────
 # `quire.version` is unique in gradle.properties, so there is no table to guess
@@ -59,6 +56,26 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $apk = Join-Path $root 'app\build\outputs\apk\release\app-release.apk'
 if (-not (Test-Path $apk)) { throw "no APK at $apk — the build reported success but left nothing" }
+
+# ── 2b: it has to be signed ─────────────────────────────────────────────────
+# The signing identity is the keystore in the user's own directory, which is
+# outside this repository; when it is missing the build produces an *unsigned*
+# release APK, which installs nowhere. That is caught here rather than assumed
+# from the build's exit code, because an unsigned APK would otherwise be
+# published, and the release *is* the delivery — Obtainium installs what is
+# attached to it.
+$sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else {
+    $line = Select-String -Path (Join-Path $root 'local.properties') -Pattern '^sdk\.dir=(.*)$' |
+        Select-Object -First 1
+    if ($line) { $line.Matches[0].Groups[1].Value -replace '\\:', ':' -replace '\\\\', '\' } else { $null }
+}
+if (-not $sdk) { throw "no ANDROID_HOME and no sdk.dir in local.properties — cannot verify the signature" }
+$buildTools = Get-ChildItem (Join-Path $sdk 'build-tools') -Directory |
+    Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+if (-not $buildTools) { throw "no build-tools under $sdk — cannot verify the signature" }
+& (Join-Path $buildTools.FullName 'apksigner.bat') verify --print-certs $apk
+if ($LASTEXITCODE -ne 0) { throw "$apk is not signed — refusing to publish it" }
+
 $named = Join-Path $root ("app\build\outputs\apk\release\quire-compose-{0}.apk" -f $version)
 Copy-Item $apk $named -Force
 

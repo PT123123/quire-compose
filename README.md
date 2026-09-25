@@ -67,9 +67,16 @@ just android-apk      # the signed release APK
 just release-publish  # bump the patch, build, push, publish (Obtainium's source)
 ```
 
-Machine-local files, both gitignored: `local.properties` (the SDK path) and
-`keystore.properties` (the signing identity — an identity, not a build artifact,
-so it lives outside every repository).
+Machine-local files: `local.properties` (the SDK path, gitignored).
+
+**Signing.** Releases are signed with the keystore in the user's own directory,
+`C:\Users\ted\keystores\debug.keystore` — despite the name, it is this app's
+permanent identity and not a throwaway, which is why the *release* uses it. Debug
+builds carry the same key, so `just install` and a published APK replace each
+other on the device instead of colliding (ADR-0010). The path and the key's
+default credentials are named in `app/build.gradle.kts`; the keystore file itself
+never enters the repository, and a `keystore.properties` (gitignored) overrides
+the defaults on a machine that keeps its identity somewhere else.
 
 ## What works today
 

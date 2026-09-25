@@ -5,24 +5,53 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// Machine-local configuration, both files gitignored:
-//   local.properties     — the SDK path (and anything else personal)
-//   keystore.properties  — the release signing identity
-//
-// The keystore lives outside the repository on purpose. It is an identity, not
-// a build artifact: Android refuses an update signed with a different key, so a
-// key that travels with a clone makes every install's future a clone's problem.
-// When the file is absent the release build stays unsigned rather than falling
-// back to the debug key — a debug-signed "release" installs fine and then
-// breaks in-place updates, which is the worst kind of silent failure.
 val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
-val keystorePropsFile = rootProject.file("keystore.properties")
-val keystoreProps = Properties().apply {
-    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+
+// ---------------------------------------------------------------------------
+// The signing identity: ONE keystore, and it signs both build types.
+//
+// It is named `debug.keystore` and it is not a throwaway. It is the identity
+// this app ships under — the name is Android tooling's default for a locally
+// generated key, which is what it was before it was promoted to permanent — and
+// it is used for the *release*, deliberately. It lives in the user's own
+// directory, outside every repository, because a signing key is an identity and
+// not a build artifact: Android refuses to install an update signed by a
+// different key, so a key that travels with a clone makes every install's future
+// a clone's problem.
+//
+// Debug is signed with it too, on purpose. AGP's default is to sign debug builds
+// with its own generated `~/.android/debug.keystore`; when that file happens to
+// hold the same key everything looks fine, and the day it is regenerated every
+// `just install` puts an app on the device that the next released APK cannot
+// update over — the only fix being an uninstall. One identity, both build types,
+// no such day.
+//
+// The store and key passwords are the Android tooling's documented default for
+// this key and are public knowledge. The file is the part worth keeping, and it
+// is not in here. `keystore.properties` (gitignored) overrides any of the values
+// below when it exists.
+// ---------------------------------------------------------------------------
+val signingProps = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
-val hasReleaseSigning = keystorePropsFile.exists()
+fun signingValue(key: String, fallback: String): String =
+    signingProps.getProperty(key) ?: fallback
+
+val keystoreFile = file(signingValue("storeFile", "C:/Users/ted/keystores/debug.keystore"))
+val keystoreAlias = signingValue("keyAlias", "androiddebugkey")
+val keystoreStorePassword = signingValue("storePassword", "android")
+val keystoreKeyPassword = signingValue("keyPassword", "android")
+val hasSigningIdentity = keystoreFile.exists()
+
+if (!hasSigningIdentity) {
+    logger.warn(
+        "no signing keystore at ${keystoreFile.absolutePath}: debug builds fall back to AGP's " +
+            "generated key and release builds stay UNSIGNED (unpublishable). Restore the keystore, " +
+            "or point keystore.properties at one."
+    )
+}
 
 // One version, in gradle.properties, turned into the two numbers Android wants.
 // versionCode has to be monotonic for an update to install, which is why it is
@@ -57,24 +86,39 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            if (hasReleaseSigning) {
-                storeFile = file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
+        // Named for what it is — the app's identity — rather than for the build
+        // type it is attached to, because it is attached to both.
+        if (hasSigningIdentity) {
+            create("quire") {
+                storeFile = keystoreFile
+                storePassword = keystoreStorePassword
+                keyAlias = keystoreAlias
+                keyPassword = keystoreKeyPassword
+                // v1 (JAR signing) is not needed by minSdk 24 and costs APK
+                // size; v2/v3 are what an install on any modern Android checks.
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
 
     buildTypes {
+        debug {
+            // Not AGP's generated key: this app's, so `just install` and the
+            // published APK replace each other instead of colliding.
+            if (hasSigningIdentity) signingConfig = signingConfigs.getByName("quire")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
+            // Unsigned when the identity is missing — an unsigned release cannot
+            // be installed at all, which is a louder and more honest failure than
+            // one signed by a key that would break the next update.
+            if (hasSigningIdentity) signingConfig = signingConfigs.getByName("quire")
         }
     }
 

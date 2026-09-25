@@ -4,6 +4,42 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0010 · One signing identity, named in the build, used for release and debug alike
+
+Decision: releases are signed with `C:\Users\ted\keystores\debug.keystore` — the
+keystore in the user's own directory — and that same key signs debug builds. The
+path, alias and passwords are named in `app/build.gradle.kts` as the default
+(`keystore.properties`, gitignored, can override them). The keystore *file* stays
+outside every repository.
+
+Why: the name `debug.keystore` is Android tooling's default name for a key
+generated locally the first time anything was debugged, and it is misleading here
+— the user promoted that key to the app's permanent identity, so it is what the
+*release* must be signed with. The name describes where the file came from; the
+role is the app's signature.
+
+Naming it in the build rather than in a gitignored file is a correction of this
+repository's first arrangement. The signing values are the Android tooling's
+documented defaults for that key (`androiddebugkey`, password `android`) and are
+public knowledge, and the sibling Rust shell already commits them in its
+`Cargo.toml`'s `[package.metadata.android.signing.release]`. Hiding them only made
+a clean clone unable to publish while protecting nothing.
+
+Extending it to debug builds prevents a specific, silent failure: AGP's default is
+to sign debug builds with its own generated `~/.android/debug.keystore`. On this
+machine that file happens to hold the same key, so everything looked right — but
+the day it is regenerated (a wiped profile, another machine), every `just install`
+would put an app on the tablet that the next released APK cannot install over,
+and the only fix would be an uninstall, discovered long after the cause.
+
+Consequences: both APKs carry the certificate
+`e0bb843a9192a9579727be09083540a277b15bac967d49cf26a8f30d750a6400`, verified with
+`apksigner verify --print-certs`, so a debug install and a released install
+replace each other freely. v1 (JAR) signing is off — minSdk 24 is exactly where v2
+begins — and v2/v3 are on. `scripts/release-publish.ps1` verifies the signature of
+the APK it is about to publish instead of trusting the build's exit code, because
+a missing keystore yields an *unsigned* release that would otherwise ship.
+
 ## ADR-0009 · One version, in gradle.properties, with versionCode derived
 
 Decision: the app's version is written once, as `quire.version` in
