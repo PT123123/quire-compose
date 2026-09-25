@@ -106,6 +106,12 @@ object OrgModel {
         val whenText: String,
         val pinned: Boolean,
         val selected: Boolean,
+        /**
+         * The note this one comments on, or `null` for an ordinary note. A
+         * comment is modelled as a note with a ref rather than a type of its own,
+         * so every projection here keeps working on one shape (ADR-0015).
+         */
+        val ref: Long? = null,
     )
 
     /** One task as the 任务 list paints it. */
@@ -199,7 +205,45 @@ object OrgModel {
         whenText = ageText(note.edited),
         pinned = note.pinned,
         selected = selected,
+        ref = note.ref,
     )
+
+    /**
+     * A note's replies: the notes whose `ref` names it, newest first.
+     *
+     * A projection of the catalog and nothing more — a comment is an ordinary note
+     * carrying a ref, so this needs no second store and no second bridge call. It
+     * is why the comments list can never disagree with the notes list.
+     */
+    fun comments(catalog: OrgCatalog, noteId: Long): List<NoteRow> =
+        catalog.notes
+            .filter { it.ref == noteId }
+            .sortedWith(compareByDescending<OrgNote> { it.created }.thenByDescending { it.id })
+            .map { noteRow(it, selected = false) }
+
+    /** How many replies a note has, for the 详细信息 sheet. */
+    fun commentCount(catalog: OrgCatalog, noteId: Long): Int =
+        catalog.notes.count { it.ref == noteId }
+
+    /**
+     * What a `↩` preview says: the parent's first non-empty line, trimmed to a
+     * readable length. `null` when the parent is gone.
+     *
+     * A **dangling** ref is tolerated rather than scrubbed — the comment is the
+     * user's writing and must not be deleted because the thing it answers was. A
+     * ref to a note that is not here simply has no preview, the same way a
+     * dangling `page_ref` paints as an ordinary block.
+     */
+    fun parentPreview(catalog: OrgCatalog, ref: Long): String? =
+        catalog.notes.firstOrNull { it.id == ref }?.let { parent ->
+            // `isNotBlank` and then `trim`: a line of spaces is not a line, and the
+            // trim cannot land on empty afterwards.
+            parent.body.ifEmpty { parent.title }
+                .lineSequence()
+                .firstOrNull { it.isNotBlank() }
+                ?.trim()
+                ?.take(100)
+        }
 
     /**
      * The three note sorts, with the pin above all of them: the flag is the user

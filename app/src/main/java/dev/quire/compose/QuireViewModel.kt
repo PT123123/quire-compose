@@ -182,7 +182,12 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         data object Closed : Compose
         data object NewNote : Compose
         data object NewTask : Compose
-        data class EditNote(val id: Long) : Compose
+        /**
+         * A reply to another note. A comment is an ordinary note carrying a
+         * reference to the note it comments on, so this variant differs from
+         * [NewNote] only in the ref it hands the bridge (ADR-0015).
+         */
+        data class Comment(val parent: Long) : Compose
     }
 
     /** 0 笔记（收件箱）· 1 任务. Two destinations, as the drawer lists them. */
@@ -226,6 +231,14 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The open task, or `-1` for the list. */
     var orgTaskSel by mutableStateOf(-1L)
+        private set
+
+    /**
+     * The open note, or `-1` for the list. A note opens on a **page of its own**
+     * rather than in the capture sheet (ADR-0015), so this is the note half of
+     * what `orgTaskSel` is to 任务.
+     */
+    var orgNoteSel by mutableStateOf(-1L)
         private set
 
     /** The capture sheet's state, and the text in it. */
@@ -274,6 +287,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgTaskMenu = null
         orgCompose = Compose.Closed
         orgTaskSel = -1
+        orgNoteSel = -1
     }
 
     fun orgPickView(view: Int) {
@@ -354,12 +368,20 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgDraft = ""
     }
 
-    /** Tapping a card: the same sheet, with the note's text in it. */
-    fun openNoteEditor(id: Long) {
-        val note = view?.org?.notes?.firstOrNull { it.id == id } ?: return
-        orgCompose = Compose.EditNote(id)
+    /**
+     * Tapping a card opens the note on a **page of its own** (ADR-0015), the way
+     * the reference app edits a note. The capture sheet is for making one thing
+     * quickly; a note being read and revised wants the whole screen.
+     */
+    fun orgSelectNote(id: Long) {
+        orgNoteSel = id
         orgNoteMenu = null
-        orgDraft = note.body.ifEmpty { note.title }
+    }
+
+    /** The note page's 评论, and a comment row's ＋: the capture overlay, in reply mode. */
+    fun openCommentComposer(parent: Long) {
+        orgCompose = Compose.Comment(parent)
+        orgDraft = ""
     }
 
     /**
@@ -423,6 +445,13 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun orgAddNote(body: String) = act { bridge.orgAddNote(body, MarkdownText.tagString(body)) }
 
+    /**
+     * ➤ in reply mode: a note whose `ref` is the note it answers. One command, so
+     * a comment and its ref are one press of 撤销 away like any other row.
+     */
+    fun orgComment(parent: Long, body: String) =
+        act { bridge.orgAddComment(parent, body, MarkdownText.tagString(body)) }
+
     /** ➤ on an open note: the same single command, with the row's own id. */
     fun orgNoteContent(note: Long, body: String) =
         act { bridge.orgNoteContent(note, body, MarkdownText.tagString(body)) }
@@ -458,12 +487,17 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun orgNoteTags(note: Long, tags: String) = act { bridge.orgNoteTags(note, tags) }
 
+    /**
+     * Delete a note — **deferred** (ADR-0015). The row is hidden the moment this
+     * is called and the real command only goes out when the 撤销 bar's three
+     * seconds run out, so 撤销 has nothing to reverse: it just drops the batch.
+     * Nothing reaches the organizer's stack until it commits, which is what keeps
+     * an undone delete from leaving a step behind.
+     */
     fun orgDeleteNote(note: Long) {
-        if (orgCompose is Compose.EditNote && (orgCompose as Compose.EditNote).id == note) {
-            orgCompose = Compose.Closed
-        }
         orgNoteMenu = null
-        act { bridge.orgDeleteNote(note) }
+        if (orgNoteSel == note) orgNoteSel = -1
+        deferDelete(setOf(note), isTask = false)
     }
 
     fun orgTaskTitle(task: Long, title: String) = act { bridge.orgTaskTitle(task, title) }
@@ -484,10 +518,11 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     /** The row menu's 移到, and the board's cross-column drop. */
     fun orgMoveTask(task: Long, list: Long) = act { bridge.orgTaskList(task, list) }
 
+    /** The task half of the same deferred delete; see [orgDeleteNote]. */
     fun orgDeleteTask(task: Long) {
         orgTaskSel = -1
         orgTaskMenu = null
-        act { bridge.orgDeleteTask(task) }
+        deferDelete(setOf(task), isTask = true)
     }
 
     fun orgSubtaskAdd(task: Long) = act { bridge.orgSubtaskAdd(task) }
@@ -524,6 +559,59 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     fun orgUndo() = act { bridge.orgUndo() }
 
     fun orgRedo() = act { bridge.orgRedo() }
+
+    // ─── the deferred delete ────────────────────────────────────────────────
+    //
+    // Delete is optimistic: the row is hidden at once and the real command waits
+    // out a 撤销 window (ADR-0015). It is owned *here* rather than by the screen
+    // that asked, which is what lets the bar survive leaving the page — the
+    // reference app keeps its pending delete the same way. `token` is what makes
+    // the three-second timer safe: an undo, or a second delete that replaced the
+    // first, leaves the old timer firing against a token that no longer matches.
+
+    /** A delete that has been hidden but not yet sent. */
+    data class PendingDelete(
+        val token: Long,
+        val ids: Set<Long>,
+        val isTask: Boolean,
+        val message: String,
+    )
+
+    var pendingDelete by mutableStateOf<PendingDelete?>(null)
+        private set
+
+    private var deleteToken = 0L
+
+    /** Hide the rows and start the window. A second delete commits the first. */
+    private fun deferDelete(ids: Set<Long>, isTask: Boolean) {
+        pendingDelete?.let { commitPendingDelete(it.token) }
+        val token = ++deleteToken
+        pendingDelete = PendingDelete(
+            token = token,
+            ids = ids,
+            isTask = isTask,
+            message = if (isTask) "任务已删除" else "笔记已删除",
+        )
+        viewModelScope.launch {
+            delay(DELETE_UNDO_MS)
+            commitPendingDelete(token)
+        }
+    }
+
+    /** The bar's 撤销: the batch is dropped and nothing was ever sent. */
+    fun undoPendingDelete() {
+        pendingDelete = null
+    }
+
+    /** The window closed (or a newer delete pushed this one out): send it. */
+    private fun commitPendingDelete(token: Long) {
+        val pending = pendingDelete ?: return
+        if (pending.token != token) return
+        pendingDelete = null
+        for (id in pending.ids) {
+            if (pending.isTask) act { bridge.orgDeleteTask(id) } else act { bridge.orgDeleteNote(id) }
+        }
+    }
 
     // ─── the plumbing ───────────────────────────────────────────────────────
 
@@ -595,6 +683,9 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val TICK_MS = 1_000L
+
+        /** How long a deleted row stays recoverable before the real command goes out. */
+        const val DELETE_UNDO_MS = 3_000L
     }
 }
 

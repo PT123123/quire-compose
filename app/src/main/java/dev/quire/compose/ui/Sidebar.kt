@@ -31,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,9 +55,15 @@ fun Sidebar(
     view: View,
     vm: QuireViewModel,
     onPageMenu: (Long) -> Unit,
+    /** Open a page in the document: close the drawer and show `Area.Pages`. */
+    onOpenPage: (Long) -> Unit,
+    /** Make a page and go to it. 收件箱 is home, so this is the way into the document. */
+    onNewPage: () -> Unit,
     onOpenNotes: () -> Unit,
     onOpenTasks: () -> Unit,
     onOpenSettings: () -> Unit,
+    /** Where the caret lands when the drawer opens, so typing reaches the drawer. */
+    firstRowFocus: FocusRequester? = null,
 ) {
     val colors = LocalQuireColors.current
 
@@ -81,7 +89,14 @@ fun Sidebar(
         // They are *destinations*, which is why they are separate rows and not two
         // tabs on one screen: 收件箱 and 任务 have their own toolbars and their own
         // state, and the drawer is the only thing between them (ADR-0013).
-        SidebarAction(label = "收件箱", icon = Icons.Default.Edit, onClick = onOpenNotes)
+        SidebarAction(
+            label = "收件箱",
+            icon = Icons.Default.Edit,
+            onClick = onOpenNotes,
+            // The drawer's first row takes the caret when it opens: that is how
+            // the keyboard's focus — and the IME — leaves the page behind it.
+            modifier = if (firstRowFocus != null) Modifier.focusRequester(firstRowFocus) else Modifier,
+        )
         SidebarAction(label = "任务", icon = Icons.Default.CheckCircle, onClick = onOpenTasks)
         HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
@@ -89,7 +104,7 @@ fun Sidebar(
             item(key = "new-page") {
                 SidebarAction(
                     label = "新建页面",
-                    onClick = { vm.createPage(parent = null) },
+                    onClick = onNewPage,
                 )
             }
 
@@ -100,7 +115,7 @@ fun Sidebar(
                     PageTreeRow(
                         page = favorites[index],
                         selected = favorites[index].id == view.activePage,
-                        onOpen = { vm.openPage(favorites[index].id) },
+                        onOpen = { onOpenPage(favorites[index].id) },
                         onToggleExpanded = { vm.toggleExpanded(favorites[index].id) },
                         onMenu = { onPageMenu(favorites[index].id) },
                     )
@@ -113,7 +128,7 @@ fun Sidebar(
                 PageTreeRow(
                     page = page,
                     selected = page.id == view.activePage,
-                    onOpen = { vm.openPage(page.id) },
+                    onOpen = { onOpenPage(page.id) },
                     onToggleExpanded = { vm.toggleExpanded(page.id) },
                     onMenu = { onPageMenu(page.id) },
                 )
@@ -124,7 +139,7 @@ fun Sidebar(
                 item(key = "recents-header") { SectionHeader("最近") }
                 items(recents.size, key = { "recent-${recents[it].first}" }) { index ->
                     val (id, title) = recents[index]
-                    SidebarAction(label = title, onClick = { vm.openPage(id) })
+                    SidebarAction(label = title, onClick = { onOpenPage(id) })
                 }
             }
         }
@@ -206,10 +221,15 @@ private fun PageTreeRow(
 }
 
 @Composable
-private fun SidebarAction(label: String, icon: ImageVector = Icons.Default.Add, onClick: () -> Unit) {
+private fun SidebarAction(
+    label: String,
+    icon: ImageVector = Icons.Default.Add,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val colors = LocalQuireColors.current
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 1.dp)
             .clip(RoundedCornerShape(Radius.sm))

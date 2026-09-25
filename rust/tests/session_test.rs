@@ -517,6 +517,45 @@ fn a_note_is_created_with_its_text_and_tags_in_one_step() {
     assert!(view["org"]["notes"].as_array().unwrap().is_empty());
 }
 
+/// 引用: a comment is an ordinary note carrying a ref. One `orgAddNote` with `ref`
+/// set, and the reply comes back with the ref it was given — so the shell can tell
+/// a comment from a note without a second row type, and a comment is one 撤销 away.
+#[test]
+fn a_comment_arrives_as_a_note_carrying_its_ref() {
+    let mut h = Harness::new("org-add-comment");
+
+    let parent = h.ok(r#"{"op":"orgAddNote","body":"the parent"}"#)["org"]["notes"][0]["id"]
+        .as_u64()
+        .unwrap();
+
+    let view = h.ok(&format!(
+        r#"{{"op":"orgAddNote","body":"a reply #回复","tags":"回复","ref":{parent}}}"#
+    ));
+    let reply = view["org"]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["body"] == "a reply #回复")
+        .expect("the reply is a note like any other");
+    assert_eq!(reply["ref"], parent, "the ref it was created with comes back");
+    assert_eq!(reply["tags"][0], "回复");
+
+    // An ordinary note has no ref at all — which is how the shell tells the two
+    // apart, and why the column is nullable rather than `DEFAULT 0`.
+    let root = view["org"]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["body"] == "the parent")
+        .unwrap();
+    assert!(root["ref"].is_null());
+
+    // One 撤销 takes the reply away and leaves the note it answered.
+    let view = h.ok(r#"{"op":"orgUndo"}"#);
+    assert_eq!(view["org"]["notes"].as_array().unwrap().len(), 1);
+    assert_eq!(view["org"]["notes"][0]["body"], "the parent");
+}
+
 /// The editor sheet sets a note's text and its tags together, for the reason the
 /// create does: one sheet produced both, and two commands would be two 撤销.
 #[test]

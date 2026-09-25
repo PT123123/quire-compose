@@ -70,6 +70,29 @@ the reference app's.
       footer. The final pass (the tasks bar and footer fixes) was cut short by the
       device's lock screen.
 
+## M2.5 · The activitywatch alignment pass — ✅
+
+The four things the reference app did and this shell did not, plus 引用. Core and
+shell together: `quire-core` gained a field first and was pushed, and this shell
+pins the rev that carries it (ADR-0015, core ADR-0001).
+
+- [x] 收件箱 is **home**: the app opens there, 任务 and 文档 both return there, and
+      the drawer's page tree is the way *into* the document (it closes the drawer
+      and switches destination now, which it never did)
+- [x] Opening the drawer **drops the page's focus and the IME**, in `Shell`, so it
+      covers every destination and stays true for pages added later
+- [x] Capture is a **non-animated overlay** (`ui/CaptureOverlay.kt`) instead of a
+      `ModalBottomSheet`: the spring was the wait before the keyboard
+- [x] Delete is **deferred behind a 撤销 bar** — notes and tasks, no confirm dialog,
+      one bar at a time, owned by the view model so it survives leaving the page
+- [x] A note opens on **its own page**, with 详细信息 and a 评论 section
+- [x] **评论 / 引用**: a comment is a note with `ref_note`; the card draws `↩`, the
+      parent lists its replies, tapping the preview jumps to the parent
+- [x] `quire-core`: `Note.ref_note`, migration 27, the store's read/write, the wire
+      row, and a `note_map` in the merge's renumber pass — with two merge tests and
+      a migration test
+- [x] Not done, and named: a persistent 回收站, 转为待办, multi-select, note history
+
 ## Next (not started)
 
 Slices in the order they are worth doing, each one a vertical cut the way M1 and

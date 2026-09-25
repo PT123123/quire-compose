@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.4.0 — 收件箱 as home, an instant capture, undo-able deletes, and 引用
+
+The alignment pass against the reference app (ADR-0015): four things this shell
+already did, done the way the app it was ported from does them.
+
+### 收件箱 is home
+
+- The app opens on 收件箱, and the back gesture returns there from 任务 and from a
+  document page rather than leaving the app. Only 收件箱 hands the gesture to the
+  system.
+- A page is reached from the drawer's tree, which now closes the drawer and
+  switches to the document — before this, tapping a page changed what was open
+  behind a 收件箱 that stayed on screen.
+- Opening the drawer drops the open page's focus, and the IME with it, on every
+  destination.
+
+### Capture is instant
+
+- The ＋ opens a **non-animated overlay** instead of a `ModalBottomSheet`. The
+  sheet's spring — a scrim fade and a two-stage expand — was what the keyboard had
+  to wait behind; the field now asks for the caret on the frame it appears.
+- Tap the scrim or press back to dismiss. The draft still survives either, and the
+  swipe-down is gone with the sheet.
+
+### Delete is undo-able
+
+- Deleting a note or a task hides the row at once and shows a **撤销** bar for three
+  seconds; the row is really deleted only when it expires, so 撤销 drops work that
+  was never sent. Both row menus and 删除任务 go through it.
+- The delete confirmation dialog is gone — the bar is what it was standing in for.
+- **No persistent 回收站 yet**: that needs soft delete in `quire-core`, which is a
+  cross-repo slice of its own (ADR-0015).
+
+### Notes get a page, and comments
+
+- Tapping a note opens it on a page of its own: its body (committing body and tags
+  together, as before), its tags, its replies, and a **详细信息** sheet listing id,
+  created, edited, tags, length, pinned, ref and comment count. The reference's
+  历史 / 恢复版本 has no counterpart in the core, and the sheet says so.
+- **评论 / 引用**: a comment is an ordinary note carrying a reference to the note it
+  answers. A reply's card draws a muted `↩ <parent's first line>` that jumps to the
+  parent (clearing the filter first if the parent is hidden by it), and the parent's
+  page has a 评论 section listing them. It is all a projection of the one catalog.
+- `quire-core` gained `notes.ref_note` — its ADR-0001, migration 27 — and this
+  shell pins the rev that carries it. A dangling ref is tolerated end to end.
+
+### Also
+
+- The bridge's `session_test` gained the comment's ref round trip; the core gained a
+  migration test and two merge tests (a comment following a renumbered parent, and
+  an orphan ref surviving untouched).
+
 ## 0.3.0 — the organizer, rebuilt to look like the app it was ported from
 
 The shape of the 笔记 / 任务 slice was wrong: it was the Slint shell's, not the

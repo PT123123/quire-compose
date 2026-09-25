@@ -61,7 +61,18 @@ class OrgModelTest {
         title: String = "note $id",
         body: String = "",
         tags: List<String> = emptyList(),
-    ) = OrgNote(id = id, title = title, body = body, pinned = pinned, tags = tags, created = 0, edited = edited)
+        /** The note it comments on, when it is a reply. */
+        ref: Long? = null,
+    ) = OrgNote(
+        id = id,
+        title = title,
+        body = body,
+        pinned = pinned,
+        tags = tags,
+        created = 0,
+        edited = edited,
+        ref = ref,
+    )
 
     private val oneList = listOf(OrgList(id = 5, name = "工作", color = 6, ord = 1))
 
@@ -277,6 +288,51 @@ class OrgModelTest {
         // showing nothing is worse than one showing the only thing the row has.
         val titled = OrgCatalog.Empty.copy(notes = listOf(note(1, title = "会议")))
         assertEquals("会议", OrgModel.notes(titled, "", "", 0, -1)[0].content)
+    }
+
+    @Test
+    fun a_reply_is_a_note_carrying_a_ref_and_the_parent_lists_it() {
+        // A comment is an ordinary note with a ref, so the comments list is a
+        // filter of the one catalog — there is no second store to disagree with.
+        val catalog = OrgCatalog.Empty.copy(
+            notes = listOf(
+                note(1, body = "the parent"),
+                note(2, body = "first reply", ref = 1).copy(created = 10),
+                note(3, body = "second reply", ref = 1).copy(created = 20),
+                note(4, body = "unrelated"),
+            ),
+        )
+
+        // Newest first, the way a thread is read.
+        assertEquals(listOf(3L, 2L), OrgModel.comments(catalog, 1).map { it.id })
+        assertEquals(2, OrgModel.commentCount(catalog, 1))
+        assertTrue(OrgModel.comments(catalog, 4).isEmpty())
+        // The ref reaches the row the card draws, and an ordinary note has none —
+        // which is the whole of what tells a comment from a note.
+        val rows = OrgModel.notes(catalog, "", "", 0, -1)
+        assertEquals(1L, rows.first { it.id == 2L }.ref)
+        assertNull(rows.first { it.id == 1L }.ref)
+    }
+
+    @Test
+    fun a_reply_preview_is_the_parents_first_non_empty_line() {
+        val catalog = OrgCatalog.Empty.copy(
+            notes = listOf(note(1, body = "\n  the first real line  \nsecond"), note(2, ref = 1)),
+        )
+        assertEquals("the first real line", OrgModel.parentPreview(catalog, 1))
+    }
+
+    @Test
+    fun a_dangling_ref_resolves_to_no_preview_rather_than_to_a_broken_one() {
+        // The parent was deleted: the comment is still the user's writing and
+        // stays a comment, it just has nothing to preview. Never a crash, and
+        // never a preview borrowed from whatever holds the id now.
+        val catalog = OrgCatalog.Empty.copy(notes = listOf(note(2, body = "orphan reply", ref = 404)))
+        assertNull(OrgModel.parentPreview(catalog, 404))
+        // The comment is still a note in the list: a dangling ref is a paint
+        // difference, not a row that disappears.
+        assertEquals(2L, OrgModel.notes(catalog, "", "", 0, -1).first().id)
+        assertEquals(404L, OrgModel.notes(catalog, "", "", 0, -1).first().ref)
     }
 
     @Test

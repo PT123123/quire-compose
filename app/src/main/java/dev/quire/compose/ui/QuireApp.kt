@@ -23,6 +23,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -37,6 +41,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.quire.compose.QuireViewModel
@@ -109,6 +115,9 @@ private fun Shell(view: View, vm: QuireViewModel) {
     val colors = LocalQuireColors.current
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val drawerFocus = remember { FocusRequester() }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // One id per open sheet/dialog rather than the row object: a reply can
     // replace every row, and a sheet holding a stale copy would show stale
@@ -119,17 +128,36 @@ private fun Shell(view: View, vm: QuireViewModel) {
     var deleteFor by remember { mutableStateOf<Long?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
 
-    var area by remember { mutableStateOf(Area.Pages) }
+    // 收件箱 is home (ADR-0015): the app opens there, and it is where 任务 and the
+    // document both return to. `openNotes()` runs once so a cold launch lands on a
+    // clean inbox rather than on whatever filter a previous window left behind.
+    var area by remember { mutableStateOf(Area.Notes) }
+    LaunchedEffect(Unit) { vm.openNotes() }
 
-    // The back gesture, in the order a touch user expects: leave the open row's
-    // form, then leave the destination, and only then let the system have it. A
-    // phone has no other way to a "up one level".
-    BackHandler(enabled = area != Area.Pages) {
+    // The back gesture, in the order a touch user expects: close the capture
+    // overlay, leave the open row's form, then leave the destination — and both
+    // 任务 and the document go **home** to 收件箱 rather than out of the app. Only
+    // 收件箱 itself hands the gesture to the system, which is what makes it the
+    // bottom of the stack.
+    BackHandler(enabled = area != Area.Notes || vm.orgCompose != QuireViewModel.Compose.Closed) {
         when {
-            area == Area.Notes && vm.orgCompose != QuireViewModel.Compose.Closed -> vm.orgCloseComposer()
+            vm.orgCompose != QuireViewModel.Compose.Closed -> vm.orgCloseComposer()
             area == Area.Tasks && organizerInDetail(vm) -> vm.orgSelectRow(-1)
-            else -> area = Area.Pages
+            area == Area.Tasks -> area = Area.Notes
+            area == Area.Pages -> area = Area.Notes
+            else -> Unit
         }
+    }
+
+    // Opening the drawer drops the page's focus and, with it, the IME. The inbox
+    // search field and the task-detail fields ask for the caret on their own, so
+    // without this a keystroke aimed at the sidebar lands in the page behind it.
+    // It lives in `Shell` rather than a page for that reason: every destination,
+    // now and later, is covered by the one effect.
+    LaunchedEffect(drawerState.isOpen) {
+        if (!drawerState.isOpen) return@LaunchedEffect
+        focusManager.clearFocus(force = true)
+        runCatching { drawerFocus.requestFocus() }
     }
 
     ModalNavigationDrawer(
@@ -144,6 +172,20 @@ private fun Shell(view: View, vm: QuireViewModel) {
                     view = view,
                     vm = vm,
                     onPageMenu = { pageMenuFor = it },
+                    // 收件箱 is home, so the page tree is the way *into* the
+                    // document: opening a row closes the drawer and switches the
+                    // area, which is the gap the old tree left (it called
+                    // `openPage` and stayed on 收件箱).
+                    onOpenPage = { id ->
+                        scope.launch { drawerState.close() }
+                        area = Area.Pages
+                        vm.openPage(id)
+                    },
+                    onNewPage = {
+                        scope.launch { drawerState.close() }
+                        area = Area.Pages
+                        vm.createPage(parent = null)
+                    },
                     onOpenNotes = {
                         scope.launch { drawerState.close() }
                         vm.openNotes()
@@ -158,12 +200,18 @@ private fun Shell(view: View, vm: QuireViewModel) {
                         scope.launch { drawerState.close() }
                         settingsOpen = true
                     },
+                    firstRowFocus = drawerFocus,
                 )
             }
         },
     ) {
         Scaffold(
             containerColor = colors.background,
+            snackbarHost = {
+                // Lifted clear of the ＋: a bar over the button that opens capture
+                // would hide the one control the inbox is built around.
+                SnackbarHost(snackbarHostState, Modifier.padding(bottom = 72.dp))
+            },
             topBar = {
                 when (area) {
                     Area.Notes -> NotesBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
@@ -188,10 +236,30 @@ private fun Shell(view: View, vm: QuireViewModel) {
         }
     }
 
-    // The capture sheet is one sheet for both destinations, because it is one
-    // gesture: ＋ opens it, ➤ closes it, and a swipe down loses nothing.
+    // The capture overlay is one overlay for both destinations, because it is one
+    // gesture: ＋ opens it, ➤ closes it, and a tap on the scrim loses nothing. It
+    // is drawn over the whole shell rather than inside a destination so its field
+    // can raise the IME on the frame it appears (ADR-0015).
     if (area != Area.Pages && vm.orgCompose != QuireViewModel.Compose.Closed) {
-        ComposeSheet(vm = vm, onDismiss = vm::orgCloseComposer)
+        CaptureOverlay(vm = vm, onDismiss = vm::orgCloseComposer)
+    }
+
+    // The delete's 撤销 bar. One bar, shown while a deferred delete is pending and
+    // dropped the instant it commits or is undone. `Indefinite` on purpose: the
+    // three seconds are the view model's, and two clocks would disagree about the
+    // same delete.
+    val pendingDelete = vm.pendingDelete
+    LaunchedEffect(pendingDelete?.token) {
+        if (pendingDelete == null) return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = pendingDelete.message,
+            actionLabel = "撤销",
+            duration = SnackbarDuration.Indefinite,
+        )
+        if (result == SnackbarResult.ActionPerformed) vm.undoPendingDelete()
+    }
+    LaunchedEffect(pendingDelete) {
+        if (pendingDelete == null) snackbarHostState.currentSnackbarData?.dismiss()
     }
 
     val menuBlock = blockMenuFor?.let { id -> view.blocks.firstOrNull { it.id == id } }

@@ -268,8 +268,37 @@ private fun OrgBar(
 @Composable
 fun NotesPage(vm: QuireViewModel) {
     val catalog = vm.view?.org ?: OrgCatalog.Empty
-    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort) {
+
+    // A note opens on a page of its own (ADR-0015), the same shape 任务 gives a
+    // row's form: the destination's bar stays above and the page fills what is
+    // left. It is `orgNoteSel` and not local state, so a turn of the tablet lands
+    // back on the note rather than on the list.
+    if (vm.orgNoteSel >= 0) {
+        val note = OrgModel.noteDetail(catalog, vm.orgNoteSel)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(bottom = 48.dp),
+        ) {
+            if (note != null) {
+                NoteDetailPage(row = note, catalog = catalog, vm = vm)
+            } else {
+                // The row is gone — deleted here, or undone away: leave the page.
+                LaunchedEffect(Unit) { vm.orgSelectNote(-1) }
+            }
+        }
+        return
+    }
+
+    // A delete in its 撤销 window is hidden on the frame it is made. The row is
+    // still in the catalog — the command has not been sent — so the projection is
+    // filtered, which is what makes the vanish instant and the undo free.
+    val hidden = vm.pendingDelete?.takeIf { !it.isTask }?.ids ?: emptySet()
+    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, hidden) {
         OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, selected = -1)
+            .filter { it.id !in hidden }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -291,7 +320,16 @@ fun NotesPage(vm: QuireViewModel) {
                 items(rows, key = { it.id }) { row ->
                     NoteCardView(
                         row = row,
-                        onClick = { vm.openNoteEditor(row.id) },
+                        preview = { id -> OrgModel.parentPreview(catalog, id) },
+                        onClick = { vm.orgSelectNote(row.id) },
+                        onParent = { parent ->
+                            // The reference app clears its filter before jumping:
+                            // a parent the current search hides must not jump to a
+                            // card that is not on screen.
+                            vm.orgSetQuery("")
+                            vm.orgPickTag("")
+                            vm.orgSelectNote(parent)
+                        },
                         onMenu = { vm.orgOpenNoteMenu(row.id) },
                     )
                 }
@@ -328,74 +366,6 @@ fun NotesPage(vm: QuireViewModel) {
     }
 }
 
-/**
- * One note as a card: the text, its tags on an accent line, its age, and a ⋯.
- *
- * The card is a *surface* rather than a divider-separated row — the reference app
- * draws every note as a rounded plate — and the ⋯ is always drawn for the reason
- * this whole shell keeps repeating: a finger cannot hover, so an affordance only a
- * mouse reveals is an affordance a phone does not have.
- */
-@Composable
-private fun NoteCardView(row: OrgModel.NoteRow, onClick: () -> Unit, onMenu: () -> Unit) {
-    val colors = LocalQuireColors.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 6.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (row.selected) colors.surfaceSelected else colors.card)
-            .border(1.dp, if (row.selected) colors.accent else colors.cardBorder, RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                text = row.content.ifEmpty { "（空白笔记）" },
-                style = QuireType.body.copy(fontSize = 15.sp, lineHeight = 22.sp),
-                color = colors.textPrimary,
-                maxLines = 8,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (row.tags.isNotEmpty()) {
-                Text(
-                    text = row.tags.joinToString("  ") { "#$it" },
-                    style = QuireType.caption.copy(fontSize = 13.sp),
-                    color = colors.accentText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Text(
-                text = row.whenText,
-                style = QuireType.caption,
-                color = colors.textMuted,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.End,
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (row.pinned) {
-                Icon(
-                    Icons.Default.Star,
-                    contentDescription = "已置顶",
-                    tint = colors.accentText,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-            IconButton(onClick = onMenu, modifier = Modifier.size(34.dp)) {
-                Icon(
-                    Icons.Default.MoreVert,
-                    contentDescription = "更多",
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
-    }
-}
-
 /** 全部笔记, then the tags the notes carry. */
 @Composable
 private fun NoteTagChips(catalog: OrgCatalog, selected: String, onPick: (String) -> Unit) {
@@ -426,6 +396,8 @@ private fun NoteTagChips(catalog: OrgCatalog, selected: String, onPick: (String)
 fun TasksPage(vm: QuireViewModel) {
     val catalog = vm.view?.org ?: OrgCatalog.Empty
     val dates = remember(catalog) { OrgModel.Dates.now() }
+    // The task half of the 撤销 window's filter; see [NotesPage].
+    val hidden = vm.pendingDelete?.takeIf { it.isTask }?.ids ?: emptySet()
 
     if (organizerInDetail(vm)) {
         val row = OrgModel.taskDetail(catalog, vm.orgTaskSel, dates)
@@ -443,7 +415,7 @@ fun TasksPage(vm: QuireViewModel) {
     }
 
     val rows = remember(
-        catalog, vm.orgView, vm.orgList, vm.orgQuery, vm.orgTaskSort, vm.orgShowDone, vm.orgTaskSel,
+        catalog, vm.orgView, vm.orgList, vm.orgQuery, vm.orgTaskSort, vm.orgShowDone, vm.orgTaskSel, hidden,
     ) {
         OrgModel.tasks(
             catalog = catalog,
@@ -454,7 +426,7 @@ fun TasksPage(vm: QuireViewModel) {
             selected = vm.orgTaskSel,
             showDone = vm.orgShowDone,
             dates = dates,
-        )
+        ).filter { it.id !in hidden }
     }
     val (done, total) = remember(catalog) { OrgModel.progress(catalog) }
     val board = vm.orgMode == 1
@@ -473,7 +445,7 @@ fun TasksPage(vm: QuireViewModel) {
             ListChips(catalog = catalog, vm = vm)
 
             if (board) {
-                BoardPane(catalog = catalog, dates = dates, vm = vm)
+                BoardPane(catalog = catalog, dates = dates, vm = vm, hidden = hidden)
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
@@ -692,9 +664,16 @@ private data class Drag(val id: Long, val title: String, val pointer: Offset)
  * nobody can discover must not be the only way to do it.
  */
 @Composable
-private fun BoardPane(catalog: OrgCatalog, dates: OrgModel.Dates, vm: QuireViewModel) {
-    val columns = remember(catalog, vm.orgQuery, vm.orgTaskSort) {
+private fun BoardPane(catalog: OrgCatalog, dates: OrgModel.Dates, vm: QuireViewModel, hidden: Set<Long>) {
+    val columns = remember(catalog, vm.orgQuery, vm.orgTaskSort, hidden) {
         OrgModel.board(catalog, vm.orgQuery, vm.orgTaskSort, dates)
+            .map { column ->
+                // A card in its 撤销 window is hidden here too, and the column's
+                // count moves with it: a header counting a card nobody can see is
+                // the same bug as the card itself.
+                val cards = column.cards.filter { it.id !in hidden }
+                column.copy(cards = cards, count = cards.size)
+            }
     }
     // Column boxes in *root* coordinates — the same space the finger is tracked
     // in, so a card in a horizontally scrolled board still finds its column.
@@ -888,261 +867,6 @@ private fun BoardColumnView(
             },
         )
     }
-}
-
-// ─── the floating capture sheet ─────────────────────────────────────────────
-
-/**
- * The floating capture window: a multi-line field, a markdown toolbar, and a ➤.
- *
- * It is the *only* way a note or a task is made on this shell, which is why it
- * carries the toolbar: the field is the content, and the five keys are how the
- * content is written. Three details are the reference app's and are load-bearing:
- * there is **no cancel button** (a swipe down is one), the send button is a glyph
- * rather than a word so the toolbar has room, and a `#`-token being typed raises
- * the tag suggestions above the field.
- *
- * Nothing commits until ➤: the sheet is a draft, and its text lives in the view
- * model so a swipe away loses nothing.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ComposeSheet(vm: QuireViewModel, onDismiss: () -> Unit) {
-    val colors = LocalQuireColors.current
-    val target = vm.orgCompose
-    // Unreachable — the shell only composes this for an open target — but the
-    // sheet must not be a place a `Closed` value can reach the write below.
-    if (target == QuireViewModel.Compose.Closed) return
-    val focus = LocalFocusManager.current
-    val focusRequester = remember { FocusRequester() }
-    val catalog = vm.view?.org ?: OrgCatalog.Empty
-
-    var field by remember(target) { mutableStateOf(TextFieldValue(vm.orgDraft)) }
-    // The draft is the view model's, so a swipe-down and a return finds it; every
-    // keystroke updates it, which is the same "write early" rule the debounced
-    // fields keep.
-    LaunchedEffect(field.text) { vm.orgSetDraft(field.text) }
-    LaunchedEffect(target) {
-        focusRequester.requestFocus()
-    }
-
-    val suggestions = remember(field, catalog) {
-        tagSuggestions(field, catalog)
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = colors.background,
-        contentColor = colors.textPrimary,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .imePadding()
-                .navigationBarsPadding()
-                .padding(bottom = Spacing.sm),
-        ) {
-            if (suggestions.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 140.dp)
-                        .padding(horizontal = Spacing.sm),
-                ) {
-                    for (tag in suggestions) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 40.dp)
-                                .clip(RoundedCornerShape(Radius.sm))
-                                .clickable { field = applyTagSuggestion(field, tag) }
-                                .padding(horizontal = Spacing.md),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("#$tag", style = QuireType.ui, color = colors.accentText)
-                        }
-                    }
-                }
-            }
-
-            BasicTextField(
-                value = field,
-                onValueChange = { field = it },
-                textStyle = QuireType.body.copy(color = colors.textPrimary),
-                cursorBrush = SolidColor(colors.accent),
-                maxLines = if (target == QuireViewModel.Compose.NewTask) 4 else 10,
-                minLines = if (target == QuireViewModel.Compose.NewTask) 1 else 3,
-                keyboardOptions = KeyboardOptions(
-                    imeAction = ImeAction.Default,
-                    capitalization = KeyboardCapitalization.Sentences,
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 88.dp)
-                    .focusRequester(focusRequester)
-                    .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-                decorationBox = { inner ->
-                    if (field.text.isEmpty()) {
-                        Text(
-                            text = when (target) {
-                                QuireViewModel.Compose.NewTask -> "添加任务…  输入 # 打标签"
-                                else -> "记录点什么… 使用 #标签 标记"
-                            },
-                            style = QuireType.body,
-                            color = colors.textMuted,
-                        )
-                    }
-                    inner()
-                },
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(end = Spacing.md),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                MarkdownToolbar(
-                    field = field,
-                    onEdit = { field = it },
-                    modifier = Modifier.weight(1f),
-                )
-                // ➤ and not 发送: the toolbar needs the width, and one glyph says
-                // the same thing on any phone width.
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(colors.accent)
-                        .clickable {
-                            val text = field.text.trim()
-                            if (text.isNotEmpty()) {
-                                when (val t = target) {
-                                    QuireViewModel.Compose.NewNote -> vm.orgAddNote(text)
-                                    QuireViewModel.Compose.NewTask -> vm.orgComposeTask(text)
-                                    is QuireViewModel.Compose.EditNote -> vm.orgNoteContent(t.id, text)
-                                    // Unreachable: the sheet is not composed for Closed.
-                                    QuireViewModel.Compose.Closed -> Unit
-                                }
-                                vm.orgClearDraft()
-                                focus.clearFocus()
-                                onDismiss()
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = if (target == QuireViewModel.Compose.NewTask) "添加任务" else "发送",
-                        tint = colors.background,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** The five keys, in the reference app's order, in a scrolling row. */
-@Composable
-private fun MarkdownToolbar(
-    field: TextFieldValue,
-    onEdit: (TextFieldValue) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = LocalQuireColors.current
-    val sel = field.selection
-
-    // Each key is one pure transform (see `MarkdownText`), and the caret moves
-    // with the text: a toolbar that left the selection behind would make the
-    // second press of 加粗 act on the wrong word.
-    fun apply(edit: MarkdownText.Edit) {
-        onEdit(TextFieldValue(edit.text, TextRange(edit.start, edit.end)))
-    }
-
-    Row(
-        modifier = modifier.horizontalScroll(rememberScrollState()).padding(start = Spacing.md),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ToolKey("#", "井号", 17, true, colors.textMuted) { apply(MarkdownText.insert(field.text, sel.start, sel.end, "#")) }
-        ToolKey("B", "加粗", 16, true, colors.textMuted) {
-            apply(MarkdownText.toggleWrap(field.text, sel.start, sel.end, "**"))
-        }
-        ToolKey("/", "斜杠", 18, false, colors.textMuted) { apply(MarkdownText.insert(field.text, sel.start, sel.end, "/")) }
-        ToolKey("•", "无序列表", 18, false, colors.textMuted) {
-            apply(MarkdownText.toggleBullet(field.text, sel.start, sel.end))
-        }
-        ToolKey("1.", "有序列表", 15, false, colors.textMuted) {
-            apply(MarkdownText.toggleOrdered(field.text, sel.start, sel.end))
-        }
-    }
-}
-
-@Composable
-private fun ToolKey(
-    label: String,
-    description: String,
-    size: Int,
-    bold: Boolean,
-    tint: Color,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .width(42.dp)
-            .height(38.dp)
-            .clip(RoundedCornerShape(Radius.sm))
-            // These keys are glyphs, not words — "#", "B", "1." — so the screen
-            // reader has only this description to go on.
-            .semantics { contentDescription = description }
-            .clickable(onClick = onClick)
-            .padding(end = 4.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            style = TextStyle(
-                fontSize = size.sp,
-                fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
-            ),
-            color = tint,
-        )
-    }
-}
-
-/**
- * The tags in the field that the caret is currently *inside* a `#token` of, best
- * first — the reference app's suggestion list.
- *
- * Empty unless the caret sits in a token with no space or second `#` after the
- * last one, which is what makes the list appear while a tag is being typed and
- * disappear once it has been typed.
- */
-private fun tagSuggestions(field: TextFieldValue, catalog: OrgCatalog): List<String> {
-    val text = field.text
-    val caret = field.selection.start.coerceIn(0, text.length)
-    val hash = text.lastIndexOf('#', (caret - 1).coerceAtLeast(0))
-    if (hash < 0) return emptyList()
-    val typed = text.substring(hash + 1, caret)
-    if (typed.contains(' ') || typed.contains('#') || typed.contains('\n')) return emptyList()
-
-    val prefix = typed.lowercase()
-    val pool = catalog.notes.flatMap { it.tags } + catalog.tasks.flatMap { it.tags }
-    return pool.distinct()
-        .filter { prefix.isEmpty() || it.lowercase().startsWith(prefix) }
-        .take(5)
-}
-
-/** Replace the half-typed token with the chosen tag, and leave a space after it. */
-private fun applyTagSuggestion(field: TextFieldValue, tag: String): TextFieldValue {
-    val text = field.text
-    val caret = field.selection.start.coerceIn(0, text.length)
-    val hash = text.lastIndexOf('#', (caret - 1).coerceAtLeast(0))
-    if (hash < 0) {
-        val out = text.substring(0, caret) + "#$tag " + text.substring(caret)
-        return TextFieldValue(out, TextRange(caret + tag.length + 2))
-    }
-    val out = text.substring(0, hash) + "#$tag " + text.substring(caret)
-    return TextFieldValue(out, TextRange(hash + tag.length + 2))
 }
 
 // ─── the task detail ────────────────────────────────────────────────────────
@@ -1483,25 +1207,18 @@ private fun OrgTasksMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit) {
     }
 }
 
-/** A note's ⋯: pin it, copy it, edit it, or delete it. */
+/**
+ * A note's ⋯: pin it, open it, reply to it, copy it, or delete it.
+ *
+ * 删除 no longer asks first: it hides the row at once and the 撤销 bar is the way
+ * back (ADR-0015). That is the reference app's own idiom, costs one fewer tap on
+ * every delete, and is what the confirmation dialog was standing in for.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: QuireViewModel) {
     val colors = LocalQuireColors.current
     val clipboard = LocalClipboardManager.current
-    var deleting by remember { mutableStateOf(false) }
-    if (deleting) {
-        ConfirmDialog(
-            title = "删除笔记",
-            message = "「${row.content.lineSequence().first().take(20)}」会被删除，可用撤销找回。",
-            onDismiss = { deleting = false },
-            onConfirm = {
-                vm.orgDeleteNote(row.id)
-                deleting = false
-                onDismiss()
-            },
-        )
-    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = colors.surface,
@@ -1513,16 +1230,23 @@ private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: Q
                 vm.orgToggleNotePinned(row.id, !row.pinned)
                 onDismiss()
             }
+            OrgSheetItem("打开") {
+                onDismiss()
+                vm.orgSelectNote(row.id)
+            }
+            OrgSheetItem("评论") {
+                onDismiss()
+                vm.openCommentComposer(row.id)
+            }
             OrgSheetItem("复制内容") {
                 clipboard.setText(AnnotatedString(row.content))
                 onDismiss()
             }
-            OrgSheetItem("编辑") {
-                onDismiss()
-                vm.openNoteEditor(row.id)
-            }
             HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
-            OrgSheetItem("删除", danger = true) { deleting = true }
+            OrgSheetItem("删除", danger = true) {
+                onDismiss()
+                vm.orgDeleteNote(row.id)
+            }
         }
     }
 }
@@ -1655,7 +1379,7 @@ private fun OrgListMenuSheet(chip: OrgModel.ListChip, onDismiss: () -> Unit, vm:
 }
 
 @Composable
-private fun OrgSheetHeader(label: String) {
+internal fun OrgSheetHeader(label: String) {
     Text(
         text = label,
         style = QuireType.caption,
@@ -1665,7 +1389,7 @@ private fun OrgSheetHeader(label: String) {
 }
 
 @Composable
-private fun OrgSheetItem(label: String, selected: Boolean = false, danger: Boolean = false, onClick: () -> Unit) {
+internal fun OrgSheetItem(label: String, selected: Boolean = false, danger: Boolean = false, onClick: () -> Unit) {
     val colors = LocalQuireColors.current
     Row(
         modifier = Modifier
@@ -2140,7 +1864,7 @@ private fun OrgQuickAdd(
  * does not throw the draft away — only moving to another row does.
  */
 @Composable
-private fun OrgTextField(
+internal fun OrgTextField(
     rowKey: String,
     value: String,
     placeholder: String,

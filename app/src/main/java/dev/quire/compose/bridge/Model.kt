@@ -103,6 +103,12 @@ data class OrgNote(
     val tags: List<String>,
     val created: Long,
     val edited: Long,
+    /**
+     * The note this one comments on, or `null`. A **dangling** id is possible and
+     * is not an error: the note it named may have been deleted, and the rule is
+     * that a ref which resolves to nothing simply paints as an ordinary note.
+     */
+    val ref: Long?,
 )
 
 data class OrgSubtask(
@@ -251,6 +257,7 @@ private fun parseNote(json: JSONObject) = OrgNote(
     tags = json.getJSONArray("tags").strings(),
     created = json.optLong("created"),
     edited = json.optLong("edited"),
+    ref = json.longOrNull("ref"),
 )
 
 private fun parseTask(json: JSONObject) = OrgTask(

@@ -44,7 +44,9 @@ app/                    the Compose app (Kotlin)
     ui/                 the palette, the icons, and the screens
       OrgModel.kt       SPEC §四十一's projections: views, sorts, badges, board
       MarkdownText.kt   the capture toolbar's text operations and the tag scan
-      Organizer.kt      the 收件箱 and 任务 pages and the capture sheet
+      Organizer.kt      the 收件箱 and 任务 pages, the cards and the rows
+      Notes.kt          a note's own page, 详细信息, and its replies
+      CaptureOverlay.kt the instant capture panel both destinations share
   src/test/             the unit tests that need no device
 rust/                   the bridge crate: cdylib + rlib, JNI, `cargo test` on the host
   src/lib.rs            the four exported symbols
@@ -98,12 +100,24 @@ Two slices, end to end: **the document** and **the organizer**.
   from the core's own byte offsets.
 
 **SPEC §四十一's 收件箱 and 任务**, reached from the drawer as two separate pages.
+**收件箱 is home**: the app opens there, and the back gesture returns there from
+either of the other two destinations rather than leaving the app.
 
 - **收件箱**: notes as cards — the text, its tags on an accent line, its age —
   with a tag chip row, a hideable search field, and 排序（最新创建 / 最新更新 / 按内容）.
-- **Capture floats.** The round ＋ opens a bottom sheet with a multi-line field, a
-  markdown toolbar (`#`, `B`, `/`, `•`, `1.`), a ➤ send and tag suggestions; a
-  note's `#tokens` become its tags, and one 撤销 puts the whole note away.
+- **Capture is instant.** The round ＋ opens a non-animated overlay — a multi-line
+  field, a markdown toolbar (`#`, `B`, `/`, `•`, `1.`), a ➤ send and tag
+  suggestions — with the caret asked for on the frame it appears, so the keyboard
+  comes up with it. A note's `#tokens` become its tags, and one 撤销 puts the whole
+  note away.
+- **A note opens on a page of its own**: its body, its tags, a 详细信息 sheet (id,
+  created, edited, tags, length, pinned, ref, comment count) and its replies.
+  **评论 / 引用**: replying to a note writes a note carrying a reference to it — the
+  card draws a `↩` preview of what it answers, the parent's page lists its comments,
+  and tapping the preview jumps to the parent.
+- **Delete is undo-able.** Deleting a note or a task hides the row at once and shows
+  a three-second **撤销** bar; the row is really deleted when the bar expires, so
+  撤销 drops work that was never sent. There is no confirmation dialog.
 - **任务**: the five smart views (收集箱 / 今天 / 近七天 / 全部 / 已完成), five sorts
   behind ⇅, per-page search, glass rows carrying the list's dot, the priority, the
   deadline and the tags, and a 4 dp progress bar with 已完成 X / Y.
@@ -139,6 +153,11 @@ Said plainly, because a shell that pretends is worse than one that is small:
 - **Multi-select** in 收件箱 / 任务 (选择 / 多选, with bulk pin, tag and delete) is not
   here. The reference app has it and it is a mode with its own toolbar, selection
   model and undo story — half of one would be worse than none (ADR-0014).
+- **No persistent 回收站.** The deferred delete buys three seconds, not a bin: a
+  real one needs soft delete in `quire-core` (a column, the store, the merge), a
+  settings page, and restore/purge — a cross-repo slice of its own (ADR-0015).
+- **A note has no history / 恢复版本.** The core keeps one copy of a note, so 撤销
+  walks an edit back but 详细信息 has no versions to list, and says so.
 - **A repeating task does not roll forward** when it is completed. The rule is
   stored and shown; v1 deliberately does not fake the roll by rewriting the
   deadline, which would be a derived write with no undo of its own.

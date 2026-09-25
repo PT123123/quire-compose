@@ -139,6 +139,14 @@ pub struct OrgNoteRow {
     pub tags: Vec<String>,
     pub created: i64,
     pub edited: i64,
+    /// The note this one comments on, when it is a reply — `None` for an ordinary
+    /// note. A **dangling** id is carried through rather than dropped: the note it
+    /// named may have been deleted, and the rule is that a ref resolving to
+    /// nothing paints as an ordinary note. `ref` and not `refNote` because that is
+    /// the name the Kotlin side reads, and one field is not worth a JSON shape of
+    /// its own.
+    #[serde(rename = "ref")]
+    pub ref_note: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -203,6 +211,7 @@ pub fn org_catalog(org: &OrganizerCatalog) -> OrgCatalog {
                 tags: n.tags.clone(),
                 created: n.created,
                 edited: n.edited,
+                ref_note: n.ref_note.map(|r| r.0),
             })
             .collect(),
         tasks: org

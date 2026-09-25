@@ -259,6 +259,7 @@ impl Organizer {
         hist: &mut History,
         body: String,
         tags: String,
+        ref_note: Option<i64>,
     ) -> Result<Vec<Change>, String> {
         let id = self.next_note;
         let now = now_secs();
@@ -270,6 +271,10 @@ impl Organizer {
             tags: parse_tags(&tags),
             created: now,
             edited: now,
+            // A comment is a note that names the note it answers. The ref travels
+            // in the same `CreateNote` as everything else, so a reply is one undo
+            // step and never exists for a moment without its parent.
+            ref_note: ref_note.map(|r| NoteId(r.max(0) as u64)),
         };
         let changes = self
             .apply(doc, hist, Command::CreateNote { note })
@@ -868,6 +873,7 @@ mod tests {
                 tags: Vec::new(),
                 created: 0,
                 edited: 0,
+                ref_note: None,
             }],
             lists: vec![TaskList {
                 id: ListId(3),

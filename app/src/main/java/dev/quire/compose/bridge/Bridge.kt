@@ -95,14 +95,19 @@ class Bridge(private val handle: Long) {
     // a keystroke does not pay for that.
 
     /**
-     * A new note, from the capture sheet: its text and its tags in one command.
+     * A new note, from the capture overlay: its text, its tags, and — when it is a
+     * reply — the note it answers, in one command.
      *
-     * One command and not three because the sheet produces one thing — a note the
+     * One command and not three because the overlay produces one thing — a note the
      * user typed — and a create-then-fill would leave a blank row on the undo stack
      * and cost three presses of 撤销 to put away.
      */
-    fun orgAddNote(body: String, tags: String): Reply =
-        send("orgAddNote", "body" to body, "tags" to tags)
+    fun orgAddNote(body: String, tags: String, ref: Long? = null): Reply =
+        send("orgAddNote", "body" to body, "tags" to tags, "ref" to ref)
+
+    /** A reply: the same command as a new note, carrying the ref it answers. */
+    fun orgAddComment(parent: Long, body: String, tags: String): Reply =
+        send("orgAddNote", "body" to body, "tags" to tags, "ref" to parent)
 
     /** An open note's text and its tags, together, for the same reason. */
     fun orgNoteContent(note: Long, body: String, tags: String): Reply =

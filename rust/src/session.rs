@@ -149,6 +149,10 @@ pub enum Request {
         body: String,
         #[serde(default)]
         tags: String,
+        /// The note this one answers, when it is a comment. Absent for an ordinary
+        /// note — `rename = "ref"` because that is the key the Kotlin bridge sends.
+        #[serde(default, rename = "ref")]
+        ref_note: Option<i64>,
     },
     /// A note's whole text and its tags together — what the editor sheet commits,
     /// for the reason above: one sheet, one step.
@@ -516,8 +520,8 @@ impl Session {
             // counts in the chips moved. The Kotlin side debounces the two fields
             // a person types into, which is what keeps that cost off the keystroke
             // path.
-            Request::OrgAddNote { body, tags } => {
-                self.org_op(|org, doc, hist| org.add_note(doc, hist, body, tags))
+            Request::OrgAddNote { body, tags, ref_note } => {
+                self.org_op(|org, doc, hist| org.add_note(doc, hist, body, tags, ref_note))
             }
             Request::OrgNoteContent { note, body, tags } => self.org_op(|org, doc, hist| {
                 org.set_note_content(doc, hist, note, body, tags)

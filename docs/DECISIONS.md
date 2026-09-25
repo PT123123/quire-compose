@@ -4,7 +4,80 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
-## ADR-0013 · 收件箱 and 任务 are two destinations, and a list's verbs are a long press
+## ADR-0015 · 收件箱 is home, delete waits behind a 撤销 bar, capture is an overlay, and a comment is a note with a ref
+
+Decision: four changes to the organizer, each one a thing the reference app does
+and this shell did not.
+
+**收件箱 is home.** The app opens on 收件箱, and the back gesture walks *down* into
+it: close the capture overlay, then leave a row's form, then leave the destination
+— and both 任务 and the document go **home to 收件箱** rather than out of the app.
+Only 收件箱 itself hands the gesture to the system, which is what makes it the
+bottom of the stack. The drawer's page tree is therefore the way *into* the
+document, and that had to be fixed rather than assumed: `PageTreeRow.onOpen` called
+`openPage` and never switched the destination or closed the drawer, so tapping a
+page changed what was open behind a 收件箱 that stayed on screen.
+
+**Delete is deferred behind a 撤销 bar.** A delete hides its row the moment it is
+asked for and shows a bar with a 撤销 action; the real command goes out only when
+the bar's three seconds expire, and 撤销 drops a batch that was never sent. Notes
+and tasks both, from the row's ⋯ and from the task detail's 删除任务. The
+confirmation dialog is **gone** — the bar is what it was standing in for, and one
+fewer tap on every delete is the point. The pending delete lives on the view model
+and not in the screen that asked, so the bar survives leaving the page; a second
+delete commits the first, so there is only ever one bar.
+
+**Capture is an overlay, not a `ModalBottomSheet`.** Same content — the multi-line
+field, the markdown toolbar, the ➤, the tag suggestions — in a plain `Box`: a scrim
+that dismisses, a bottom panel, and the caret asked for on the same frame the field
+appears.
+
+**A note opens on a page of its own**, with its body, its tags, a 详细信息 sheet and
+its replies. And 引用: a comment is an ordinary note carrying `ref_note` — the note
+it answers — drawn as a muted `↩ <parent's first line>` under the text and listed
+in the parent's 评论 section. `core::organizer` gained the field (quire-core
+ADR-0001), the bridge carries it, and every read of it is a projection of the one
+catalog: `OrgModel.comments` is `notes.filter { it.ref == id }`, so a comment can
+never drift out of the notes list.
+
+Why: the reference app. Its delete hides the row and shows a 3 s 撤销 bar (a
+persistent bin is not what it does, and not what was asked for here); its capture
+window is a floating panel that is on screen the instant the ＋ is tapped; its
+note opens on a separate screen; and its 引用 is a note previewed under the note
+that cited it. The overlay is also a straight latency fix: the sheet's spring — a
+scrim fade plus a two-stage expand — was what a person experiences as "the
+keyboard is slow", because the IME cannot start until the animation lands.
+
+Consequences, including what is deliberately *not* here:
+
+- The 撤销 bar shows the same row for notes and tasks and its three seconds are the
+  view model's alone (`SnackbarDuration.Indefinite`, one clock). If the app is
+  killed inside the window the delete simply never happens and the row is still
+  there — the safe direction, and the reason there is no journal to recover.
+- **No persistent 回收站.** It is not a shell feature: it needs soft delete in
+  `quire-core` (a column, the store, and the merge), a settings page, and
+  restore/purge. The deferred delete is the part that does not, which is why it is
+  the part that shipped.
+- The overlay loses swipe-to-dismiss; tapping the scrim and the back gesture both
+  dismiss it, and the draft survives either. If that reads worse than the latency
+  it removes, it is one composable to change back.
+- A **dangling ref** is tolerated end to end: deleting a parent leaves its comments
+  pointing at an id that names nothing, and the card paints as an ordinary note
+  rather than as a broken link — the same rule `blocks.page_ref` keeps. The merge
+  remaps a renumbered parent and passes an unresolvable ref through unchanged.
+- 详细信息 lists what the core actually holds. The reference's 历史 / 恢复版本 has
+  **no counterpart** for a note, so the sheet says so instead of showing an empty
+  history.
+- The comment is visible to the desktop shell as soon as it reads the same
+  `quire.db`; the desktop's projection does not paint the ref yet, which is the
+  "ordinary note" answer and therefore incomplete rather than wrong. Its
+  `docs/SPEC.md` §四十一 and its own ADR belong to that repository and wait for its
+  next core bump.
+- Not in this pass, and named so they are not mistaken for oversights: 转为待办,
+  multi-select (选择 / 多选), note history, and rolling a completed repeating task
+  forward.
+
+
 
 Decision: SPEC §四十一's notes and tasks are **two separate pages**, each reached
 from its own drawer row, each with its own toolbar and its own state. There is no
