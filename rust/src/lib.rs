@@ -27,6 +27,7 @@
 
 mod org;
 mod session;
+mod sync;
 mod view;
 mod workspace;
 

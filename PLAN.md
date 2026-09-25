@@ -93,6 +93,30 @@ pins the rev that carries it (ADR-0015, core ADR-0001).
       a migration test
 - [x] Not done, and named: a persistent 回收站, 转为待办, multi-select, note history
 
+## M2.75 · 同步 — ✅ (the read-only share still open)
+
+LAN sync over `quire-core`'s own protocol, which it has shipped unwired since M0.
+`PLAN`'s M6 named both halves; this is the sync half, and the share half is left
+where it was (ADR-0016).
+
+- [x] A fourth destination, `ui/Sync.kt`: the discovery banner, 本机 address and
+      id, 已配对 / 已发现 device lists with 在线·离线 and 上次同步, 立即同步 /
+      忘记 / 发起配对, 按地址添加, the interval presets, 本机别名, the log tail
+- [x] `rust/src/sync.rs`: the two halves the core leaves to a shell — the snapshot
+      out of the workspace, and a merged snapshot back in (`replace_all` for the
+      document, row `Change`s for the organizer, then reload in memory)
+- [x] The peer book, this device's identity, the log and the per-peer shadows are
+      the desktop shell's `sync.*` `settings` keys, so a carried library keeps them
+- [x] **The gate**: a library with a database or an attachment refuses to sync, and
+      the engine is never started — a partial snapshot would make a peer's merge
+      read the absence as a deletion
+- [x] The engine's jobs ride the existing one-second tick; Identity answered on the
+      first `syncState`, so nothing listens until the page is opened
+- [x] Two Rust tests (the gate; export → merge → apply → re-export) and
+      `SyncModelTest` pinning the wire keys
+- [ ] The read-only LAN share (port 5877), conflict lists, per-device statistics,
+      pairing codes, and the reference app's cloud / backup / WiFi-transfer pages
+
 ## Next (not started)
 
 Slices in the order they are worth doing, each one a vertical cut the way M1 and
@@ -105,7 +129,9 @@ M2 were:
   FTS5 index. (The organizer's own two needles are not that search.)
 - **M5 · Attachments**: import through the system picker (SAF), thumbnails, and
   image blocks that show a picture.
-- **M6 · LAN share and sync**: `quire-core` ships both; neither is wired.
+- **M6 · LAN share**: the read-only Markdown share on 5877 — the half of the LAN
+  work `M2.75` did not take. **Sync** itself is done (`quire-core`'s protocol,
+  wired in `rust/src/sync.rs` with the 同步 page on top).
 - **The organizer's tail**: multi-select with its bulk pin / tag / delete
   (ADR-0014 says why it was left out), rolling a completed repeating task forward,
   and a note body that renders more than plain text if a second content format is

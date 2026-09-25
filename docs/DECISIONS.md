@@ -4,7 +4,70 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
-## ADR-0015 · 收件箱 is home, delete waits behind a 撤销 bar, capture is an overlay, and a comment is a note with a ref
+## ADR-0016 · 同步 is a destination, and a library this build cannot carry refuses to sync at all
+
+Decision: LAN sync gets a **page** — a fourth drawer row, `ui/Sync.kt` — over
+`quire-core`'s own protocol (HTTP 5878, UDP discovery 5879, the version-2
+snapshot, the three-way merge). The shell supplies the two halves the core leaves
+out (`sync_export` / `sync_apply_remote`, `rust/src/sync.rs`), the peer book and
+the log are the same `settings` rows the other shells use, and the engine is
+started **by opening the page** — nothing listens until 同步 has been shown.
+
+The page carries what this protocol actually has: a discovery banner, this
+device's address and id, **已配对的设备** with 在线/离线, 上次同步 and 立即同步 /
+忘记, **已发现的设备** with 发起配对, 按地址添加 for a network where the
+announcement cannot get through, the interval presets (10 秒 / 1 分 / 5 分 / 30 分 /
+仅手动), 本机别名, and the last dozen log lines. It is the reference app's own page
+narrowed to this protocol: that app's 同步 hub also has pairing codes, per-device
+statistics, conflict lists, a permission/keep-alive page, D1 cloud sync, cloud
+backup and a WiFi-transfer mode, and `quire-core` has none of them.
+
+**The one decision that matters: a library with a database or an attachment
+cannot be synced by this build, and it must refuse rather than sync partially.**
+This shell's UI does not model either (databases render as a placeholder, images
+as an id), and the core exposes no public bulk write for the database layer — so
+a snapshot built here would carry `databases: []` / `attachments: []` for a
+library that has them. A merge reads *absence* as a deletion: the peer's shadow
+would say those rows were agreed present, this device would say they are gone,
+and the next merge would delete the user's databases on both machines. So the
+gate is checked **before the engine starts** — no threads, no listening socket,
+no announcement, the reason on screen — and an inbound snapshot that carries
+either is refused. `SyncView.unsyncable` is the reason, and the page draws it.
+
+Why the write path is `replace_all` plus row changes rather than the desktop's
+incremental diff: the merged snapshot *is* a whole workspace, and this session
+holds a `PersistedState`'s worth of it, so the document half goes back with one
+`replace_all` — with `meta` and `settings` read out first and handed straight
+back, because that call deletes those two tables and the peer book, this device's
+id and the per-peer shadows all live in `settings`. The organizer is *not* part of
+a `PersistedState` (a bulk replace leaves it alone on purpose), so its rows go
+back as the same `Change`s every organizer write uses, from a row-level diff.
+Afterwards the session rebuilds what it holds in memory and **drops both undo
+stacks**: their entries name rows the merge may have replaced.
+
+Consequences:
+
+- The engine's jobs are answered on the ordinary one-second tick. The core's
+  threads block until the session replies, and the tick is the session's own
+  heartbeat, so no second timer exists and an idle app's tick still answers with
+  nothing to draw. A job that cannot be answered — an export of a library that
+  fails the gate — is answered by **dropping the reply channel**, so the peer's
+  pull fails loudly instead of receiving an empty workspace, which its merge
+  would read as "this device deleted everything".
+- The merge's fresh ids are seeded from `max(local, remote) + 1` per collection
+  rather than reserved from the session, and the reload walks every in-memory
+  watermark past what it loaded — so nothing minted next can collide.
+- `INTERNET` is the only manifest permission (it was already there, reserved for
+  this). UDP broadcast reception is not guaranteed on every Android device, which
+  is why 按地址添加 exists; there is no multicast lock and no keep-alive page.
+- Not here, and named so they are not mistaken for oversights: the read-only LAN
+  **share** (port 5877, `quire-core`'s other LAN module), conflict lists,
+  per-device statistics, pairing codes, and the cloud/backup/WiFi-transfer
+  siblings the reference app has. The desktop shell's `settings` rows mean a
+  library carried between shells keeps its peer book, its identity and its
+  shadows.
+
+
 
 Decision: four changes to the organizer, each one a thing the reference app does
 and this shell did not.

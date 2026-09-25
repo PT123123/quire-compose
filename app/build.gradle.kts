@@ -234,4 +234,9 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // The real `org.json`, for the tests only: `android.jar`'s copy is a stub
+    // that throws "not mocked" under a JVM test, and the bridge's whole contract
+    // is one JSON string — `SyncModelTest` is what pins it. Nothing at runtime
+    // changes; the framework's own `org.json` is what the app uses on a device.
+    testImplementation("org.json:json:20240303")
 }

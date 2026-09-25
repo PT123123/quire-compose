@@ -193,6 +193,33 @@ class Bridge(private val handle: Long) {
 
     fun orgRedo(): Reply = send("orgRedo")
 
+    // ─── LAN sync ───────────────────────────────────────────────────────────
+    //
+    // `syncState` is also the switch: the session starts the engine the first time
+    // it is asked, so a shell that never opens the 同步 page spawns no threads and
+    // binds no port. Everything else is that page's verbs, and every one answers
+    // with the whole view — a peer table and a log line are what the screen is
+    // made of, so there is no quiet path to keep.
+
+    fun syncState(): Reply = send("syncState")
+
+    fun syncSetAuto(on: Boolean): Reply = send("syncSetAuto", "on" to on)
+
+    /** Seconds, floored by the bridge at 15. */
+    fun syncSetInterval(seconds: Long): Reply = send("syncSetInterval", "seconds" to seconds)
+
+    fun syncSetName(name: String): Reply = send("syncSetName", "name" to name)
+
+    /** `192.168.1.20` or `192.168.1.20:5878` — the by-hand door onto the LAN. */
+    fun syncAddPeer(ip: String, port: Int): Reply =
+        send("syncAddPeer", "ip" to ip, "port" to port)
+
+    fun syncPair(id: String): Reply = send("syncPair", "id" to id)
+
+    fun syncNow(id: String): Reply = send("syncNow", "id" to id)
+
+    fun syncForget(id: String): Reply = send("syncForget", "id" to id)
+
     /** Flush and free the native session. After this the handle is dead. */
     fun close() = Native.close(handle)
 

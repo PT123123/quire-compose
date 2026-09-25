@@ -276,6 +276,47 @@ pub enum Request {
     /// Walk the area's own stack — never the open page's.
     OrgUndo,
     OrgRedo,
+
+    // ─── LAN sync (`crate::sync`) ───────────────────────────────────────────
+    //
+    // The page's own verbs, and no more than the page draws. Every one answers
+    // with the whole view, because a peer table, a log line or a status word is
+    // what the screen is made of — there is no keystroke path here to keep off
+    // the bridge.
+    /// The 同步 page's state, and the request that starts the engine: opening the
+    /// page is what puts this device on the LAN, so nothing listens before it.
+    SyncState,
+    SyncSetAuto {
+        on: bool,
+    },
+    SyncSetInterval {
+        seconds: u64,
+    },
+    SyncSetName {
+        #[serde(default)]
+        name: String,
+    },
+    /// Pair with a device already heard on the wire.
+    SyncPair {
+        #[serde(default)]
+        id: String,
+    },
+    /// `192.168.1.20` or `192.168.1.20:5878` — the door for a network where the
+    /// announcement cannot get through.
+    SyncAddPeer {
+        #[serde(default)]
+        ip: String,
+        #[serde(default)]
+        port: u16,
+    },
+    SyncNow {
+        #[serde(default)]
+        id: String,
+    },
+    SyncForget {
+        #[serde(default)]
+        id: String,
+    },
 }
 
 /// Whether a reply carries the full view.
@@ -294,23 +335,27 @@ struct Reply {
 }
 
 pub struct Session {
-    repo: Arc<SqliteRepository>,
-    persistence: PersistenceService,
-    doc: Document,
-    hist: History,
-    ws: Workspace,
+    pub(crate) repo: Arc<SqliteRepository>,
+    pub(crate) persistence: PersistenceService,
+    pub(crate) doc: Document,
+    pub(crate) hist: History,
+    pub(crate) ws: Workspace,
     /// SPEC §四十一's area: the catalog, its id watermarks, and the area's own
     /// undo bookkeeping. Held here rather than in Kotlin because the writes need
     /// it — `Command::Update*` is handed the row *before* and the row *after*, and
     /// only the owner of the catalog has the first of those.
-    org: Organizer,
-    settings: Settings,
-    active: Option<PageId>,
-    theme: String,
-    recents: Vec<PageId>,
-    can_undo: bool,
-    can_redo: bool,
-    notice: Option<String>,
+    pub(crate) org: Organizer,
+    pub(crate) settings: Settings,
+    pub(crate) active: Option<PageId>,
+    pub(crate) theme: String,
+    pub(crate) recents: Vec<PageId>,
+    pub(crate) can_undo: bool,
+    pub(crate) can_redo: bool,
+    pub(crate) notice: Option<String>,
+    /// LAN sync, started the first time the 同步 page is opened. `None` until
+    /// then, so a session that never opens that page spawns no threads and
+    /// listens on no port (`crate::sync`).
+    pub(crate) sync: Option<crate::sync::Sync>,
 }
 
 impl Session {
@@ -385,6 +430,9 @@ impl Session {
             can_undo: false,
             can_redo: false,
             notice,
+            // Not started here: the engine spawns four threads and binds a port,
+            // and an app that never opens the 同步 page should do neither.
+            sync: None,
         })
     }
 
@@ -397,6 +445,45 @@ impl Session {
     /// going away does not take the last edit with it.
     pub fn flush(&self) -> Result<(), String> {
         self.persistence.force_flush().map_err(|e| e.to_string())
+    }
+
+    /// Rebuild everything this session holds in memory from the file.
+    ///
+    /// Used by LAN sync after a merged snapshot has been written: the rows are in
+    /// the database but the document, the page tree, the organizer and the
+    /// watermarks are all stale. The undo stacks are dropped on purpose — their
+    /// entries name rows the merge may have replaced, and a step that "reverts" a
+    /// row nobody asked about is worse than losing the stack.
+    pub(crate) fn reload_in_memory(&mut self) -> Result<(), String> {
+        let state = self.repo.load().map_err(|e| e.to_string())?;
+
+        let mut doc = Document::new(0);
+        let mut by_page: HashMap<PageId, Vec<quire_core::core::Block>> = HashMap::new();
+        for block in &state.blocks {
+            by_page.entry(block.page).or_default().push(block.clone());
+        }
+        for (page, blocks) in by_page {
+            doc.set_page_blocks(page, blocks);
+        }
+        self.doc = doc;
+
+        self.ws = Workspace::from_persisted(&state.pages);
+        let (settings, meta) = Settings::from_state(&state);
+        self.settings = settings;
+        self.theme = self.settings.theme().unwrap_or("system").to_string();
+        self.recents = parse_recents(meta.get(META_RECENTS), &self.ws);
+        self.active = self
+            .active
+            .filter(|p| self.ws.contains(*p))
+            .or_else(|| self.ws.first_root());
+
+        let (org, _org_notice) = Organizer::load(&self.repo);
+        self.org = org;
+
+        self.hist = History::default();
+        self.can_undo = false;
+        self.can_redo = false;
+        Ok(())
     }
 
     /// Handle one request body and answer with one JSON object.
@@ -442,6 +529,7 @@ impl Session {
             notice: self.notice.clone(),
             page_count: self.ws.len(),
             org: view::org_catalog(self.org.catalog()),
+            sync: self.sync_view(),
         }
     }
 
@@ -450,7 +538,15 @@ impl Session {
             Request::Boot => Ok(Outcome::Full),
             Request::Tick => {
                 self.persistence.flush_if_due().map_err(|e| e.to_string())?;
-                Ok(Outcome::Quiet)
+                // LAN sync's progress rides this tick. The engine's threads block
+                // until the session answers them, and this is the session's one
+                // heartbeat — so a cycle advances without a timer of its own, and
+                // an idle app's second still answers with nothing to draw.
+                Ok(if self.sync_pump() {
+                    Outcome::Full
+                } else {
+                    Outcome::Quiet
+                })
             }
             Request::Flush => {
                 self.persistence.force_flush().map_err(|e| e.to_string())?;
@@ -597,6 +693,45 @@ impl Session {
             }
             Request::OrgUndo => self.walk_org_history(true),
             Request::OrgRedo => self.walk_org_history(false),
+
+            // ─── LAN sync ───────────────────────────────────────────────────
+            //
+            // `SyncState` is the page being opened, and it is what starts the
+            // engine — so a session that never shows that page never listens.
+            Request::SyncState => {
+                self.sync_ensure()?;
+                self.sync_pump();
+                Ok(Outcome::Full)
+            }
+            Request::SyncSetAuto { on } => {
+                self.sync_set_auto(on)?;
+                Ok(Outcome::Full)
+            }
+            Request::SyncSetInterval { seconds } => {
+                self.sync_set_interval(seconds)?;
+                Ok(Outcome::Full)
+            }
+            Request::SyncSetName { name } => {
+                self.sync_set_name(&name)?;
+                Ok(Outcome::Full)
+            }
+            Request::SyncPair { id } => {
+                self.sync_pair(&id)?;
+                Ok(Outcome::Full)
+            }
+            Request::SyncAddPeer { ip, port } => {
+                self.sync_ensure()?;
+                self.sync_add_peer(&ip, port)?;
+                Ok(Outcome::Full)
+            }
+            Request::SyncNow { id } => {
+                self.sync_now(&id)?;
+                Ok(Outcome::Full)
+            }
+            Request::SyncForget { id } => {
+                self.sync_forget_peer(&id)?;
+                Ok(Outcome::Full)
+            }
         }
     }
 
@@ -846,7 +981,7 @@ impl Session {
     // ─── persistence plumbing ───────────────────────────────────────────────
 
     /// Apply changes now, in one transaction, instead of queueing them.
-    fn apply_now(&self, changes: Vec<Change>) -> Result<(), String> {
+    pub(crate) fn apply_now(&self, changes: Vec<Change>) -> Result<(), String> {
         self.repo.apply(&changes).map_err(|e| e.to_string())
     }
 

@@ -47,12 +47,14 @@ app/                    the Compose app (Kotlin)
       Organizer.kt      the 收件箱 and 任务 pages, the cards and the rows
       Notes.kt          a note's own page, 详细信息, and its replies
       CaptureOverlay.kt the instant capture panel both destinations share
+      Sync.kt           同步: the device list, the pairing verbs and the timer
   src/test/             the unit tests that need no device
 rust/                   the bridge crate: cdylib + rlib, JNI, `cargo test` on the host
   src/lib.rs            the four exported symbols
   src/session.rs        every operation the shell can ask for
   src/workspace.rs      the page tree (the core has no page commands)
   src/org.rs            the organizer's writes, ids, clock and undo stack
+  src/sync.rs           LAN sync's shell half: the snapshot out, the merge back in
   src/view.rs           the projection the UI redraws
 ```
 
@@ -134,6 +136,21 @@ either of the other two destinations rather than leaving the app.
 - Everything above is persisted through `quire-core`'s change stream, debounced
   the way the other shells debounce it.
 
+**同步**, a fourth page: LAN sync over `quire-core`'s own protocol (HTTP 5878, UDP
+discovery 5879, snapshot v2, a three-way merge against a per-peer shadow).
+
+- The device list: this device's alias and address, **已配对的设备** with 在线/离线
+  and 上次同步, **已发现的设备** with 发起配对, and 按地址添加 for a network where
+  the announcement cannot get through.
+- 立即同步 and 忘记 per device; 10 秒 / 1 分 / 5 分 / 30 分 / 仅手动 for the interval;
+  the last dozen log lines.
+- **Opening the page is what puts this device on the LAN** — the engine's threads
+  and its socket start with the first request, so nothing listens otherwise. The
+  engine's work is answered on the ordinary one-second tick.
+- The peer book, this device's identity and the per-peer shadows are the same
+  `sync.*` `settings` rows the desktop shell uses, so a library carried between
+  shells keeps its pairings.
+
 ## What does not work yet
 
 Said plainly, because a shell that pretends is worse than one that is small:
@@ -145,7 +162,14 @@ Said plainly, because a shell that pretends is worse than one that is small:
 - **Images and files** show their attachment id, not the picture.
 - **Search** is the organizer's own two needles and nothing else — no page
   palette and no in-page find bar.
-- **LAN share and sync** are not wired, though `quire-core` ships both.
+- **A library with a database or an attachment cannot be synced at all.** This
+  shell models neither, and a snapshot that dropped them would make a peer's merge
+  read the absence as a deletion — so 同步 refuses, says why, and starts nothing
+  (ADR-0016).
+- **The read-only LAN share** (port 5877, `quire-core`'s other LAN module) is still
+  not wired, and neither are the reference app's pairing codes, per-device
+  statistics, conflict lists, or its cloud / backup / WiFi-transfer siblings —
+  `quire-core` has none of those.
 - **Backspace on an empty block** does not merge it into the one above: a soft
   keyboard's backspace is not a key event a Compose text field can see. Deleting
   an empty block goes through the block menu. (The organizer's fields do not need

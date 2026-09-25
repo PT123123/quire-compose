@@ -102,12 +102,15 @@ private fun StartupScreen(error: String?) {
 /**
  * Which destination is on screen.
  *
- * Three, because SPEC §四十一's second and third are *separate pages* in the
+ * Four, because SPEC §四十一's second and third are *separate pages* in the
  * reference app — 收件箱 and 任务 are two drawer entries with two toolbars, not two
  * tabs on one page — and because the document is not destroyed by leaving it: a
  * page opened on the way into 笔记 is still open on the way back (ADR-0013).
+ * **同步** joins them as the fourth for the same reason: it is a page with a device
+ * list and its own settings in the app this shell is ported from, and it is where
+ * this device is put on the LAN.
  */
-private enum class Area { Pages, Notes, Tasks }
+private enum class Area { Pages, Notes, Tasks, Sync }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -145,6 +148,7 @@ private fun Shell(view: View, vm: QuireViewModel) {
             area == Area.Tasks && organizerInDetail(vm) -> vm.orgSelectRow(-1)
             area == Area.Tasks -> area = Area.Notes
             area == Area.Pages -> area = Area.Notes
+            area == Area.Sync -> area = Area.Notes
             else -> Unit
         }
     }
@@ -196,6 +200,10 @@ private fun Shell(view: View, vm: QuireViewModel) {
                         vm.openTasks()
                         area = Area.Tasks
                     },
+                    onOpenSync = {
+                        scope.launch { drawerState.close() }
+                        area = Area.Sync
+                    },
                     onOpenSettings = {
                         scope.launch { drawerState.close() }
                         settingsOpen = true
@@ -216,6 +224,7 @@ private fun Shell(view: View, vm: QuireViewModel) {
                 when (area) {
                     Area.Notes -> NotesBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
                     Area.Tasks -> TasksBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
+                    Area.Sync -> SyncBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
                     Area.Pages -> TopBar(
                         view = view,
                         vm = vm,
@@ -230,6 +239,7 @@ private fun Shell(view: View, vm: QuireViewModel) {
                 when (area) {
                     Area.Notes -> NotesPage(vm = vm)
                     Area.Tasks -> TasksPage(vm = vm)
+                    Area.Sync -> SyncPage(vm = vm)
                     Area.Pages -> EditorScreen(view = view, vm = vm, onBlockMenu = { blockMenuFor = it })
                 }
             }

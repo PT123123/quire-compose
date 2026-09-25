@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Reserved for the LAN share and the sync module quire-core already
-         carries; the first slice opens nothing. -->
+    <!-- LAN sync (`quire-core`'s own protocol, port 5878 / discovery 5879) and,
+         later, the read-only LAN share. No manifest permission covers UDP
+         broadcast reception on every device, so 同步 also offers 按地址添加: a
+         peer typed in by address, which needs no announcement at all. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application

@@ -560,6 +560,29 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun orgRedo() = act { bridge.orgRedo() }
 
+    // ─── LAN sync ───────────────────────────────────────────────────────────
+    //
+    // The page's verbs, each one a whole-view reply. `openSync` doubles as the
+    // switch that puts this device on the LAN — the session starts the engine the
+    // first time it is asked — and the ordinary one-second tick is what keeps a
+    // cycle moving, so nothing here needs a timer.
+
+    fun openSync() = act { bridge.syncState() }
+
+    fun syncSetAuto(on: Boolean) = act { bridge.syncSetAuto(on) }
+
+    fun syncSetInterval(seconds: Long) = act { bridge.syncSetInterval(seconds) }
+
+    fun syncSetName(name: String) = act { bridge.syncSetName(name) }
+
+    fun syncAddPeer(ip: String, port: Int = 0) = act { bridge.syncAddPeer(ip, port) }
+
+    fun syncPair(id: String) = act { bridge.syncPair(id) }
+
+    fun syncNow(id: String) = act { bridge.syncNow(id) }
+
+    fun syncForget(id: String) = act { bridge.syncForget(id) }
+
     // ─── the deferred delete ────────────────────────────────────────────────
     //
     // Delete is optimistic: the row is hidden at once and the real command waits

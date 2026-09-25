@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -61,6 +62,7 @@ fun Sidebar(
     onNewPage: () -> Unit,
     onOpenNotes: () -> Unit,
     onOpenTasks: () -> Unit,
+    onOpenSync: () -> Unit,
     onOpenSettings: () -> Unit,
     /** Where the caret lands when the drawer opens, so typing reaches the drawer. */
     firstRowFocus: FocusRequester? = null,
@@ -98,6 +100,7 @@ fun Sidebar(
             modifier = if (firstRowFocus != null) Modifier.focusRequester(firstRowFocus) else Modifier,
         )
         SidebarAction(label = "任务", icon = Icons.Default.CheckCircle, onClick = onOpenTasks)
+        SidebarAction(label = "同步", icon = Icons.Default.Refresh, onClick = onOpenSync)
         HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
         LazyColumn(modifier = Modifier.weight(1f)) {

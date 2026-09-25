@@ -86,6 +86,8 @@ data class View(
      * keeps typing in a search box off the bridge.
      */
     val org: OrgCatalog,
+    /** LAN sync: this device, the peer book, the log. 同步 is its own destination. */
+    val sync: SyncState,
 )
 
 // ─── the organizer's rows ───────────────────────────────────────────────────
@@ -159,6 +161,69 @@ data class OrgCatalog(
     }
 }
 
+// ─── LAN sync ───────────────────────────────────────────────────────────────
+//
+// The 同步 page's rows. A projection like everything else here: what the page
+// draws of the peer book the session holds, never a second copy of it.
+
+data class SyncRow(
+    val id: String,
+    val name: String,
+    /** `android` | `windows` | `linux` | `macos` | `other`. */
+    val kind: String,
+    /** `ip:port`, or `""` for a device not yet heard at an address. */
+    val address: String,
+    val paired: Boolean,
+    /** Heard within the last 15 seconds. */
+    val online: Boolean,
+    /** RFC 3339 of the last successful sync, or `""`. */
+    val lastSync: String,
+    val selfDevice: Boolean,
+)
+
+data class SyncLogRow(val at: String, val peer: String, val ok: Boolean, val message: String)
+
+data class SyncState(
+    val running: Boolean,
+    /** Why this library cannot be synced, when it cannot. */
+    val unsyncable: String?,
+    val selfId: String,
+    val selfName: String,
+    val selfAddress: String,
+    val auto: Boolean,
+    val interval: Long,
+    val port: Int,
+    val discoveryPort: Int,
+    val busy: Boolean,
+    val status: String,
+    val rows: List<SyncRow>,
+    val log: List<SyncLogRow>,
+) {
+    /** The device rows that are paired, this device excluded. */
+    val peers: List<SyncRow> get() = rows.filter { it.paired && !it.selfDevice }
+
+    /** Devices heard on the wire that have not been paired yet. */
+    val discovered: List<SyncRow> get() = rows.filter { !it.paired && !it.selfDevice }
+
+    companion object {
+        val Empty = SyncState(
+            running = false,
+            unsyncable = null,
+            selfId = "",
+            selfName = "",
+            selfAddress = "",
+            auto = true,
+            interval = 60,
+            port = 5878,
+            discoveryPort = 5879,
+            busy = false,
+            status = "",
+            rows = emptyList(),
+            log = emptyList(),
+        )
+    }
+}
+
 /** What one call answered. */
 sealed interface Reply {
     /** The structure changed; redraw from this. */
@@ -203,6 +268,7 @@ private fun parseView(json: JSONObject): View = View(
     notice = if (json.isNull("notice")) null else json.optString("notice").ifEmpty { null },
     pageCount = json.optInt("pageCount"),
     org = json.optJSONObject("org")?.let(::parseOrg) ?: OrgCatalog.Empty,
+    sync = json.optJSONObject("sync")?.let(::parseSync) ?: SyncState.Empty,
 )
 
 private fun parsePage(json: JSONObject) = PageRow(
@@ -290,6 +356,40 @@ private fun parseList(json: JSONObject) = OrgList(
     name = json.optString("name"),
     color = json.optInt("color"),
     ord = json.optLong("ord"),
+)
+
+private fun parseSync(json: JSONObject) = SyncState(
+    running = json.optBoolean("running"),
+    unsyncable = if (json.isNull("unsyncable")) null else json.optString("unsyncable").ifEmpty { null },
+    selfId = json.optString("selfId"),
+    selfName = json.optString("selfName"),
+    selfAddress = json.optString("selfAddress"),
+    auto = json.optBoolean("auto", true),
+    interval = json.optLong("interval", 60),
+    port = json.optInt("port", 5878),
+    discoveryPort = json.optInt("discoveryPort", 5879),
+    busy = json.optBoolean("busy"),
+    status = json.optString("status"),
+    rows = json.getJSONArray("rows").mapObjects(::parseSyncRow),
+    log = json.getJSONArray("log").mapObjects(::parseSyncLog),
+)
+
+private fun parseSyncRow(json: JSONObject) = SyncRow(
+    id = json.optString("id"),
+    name = json.optString("name"),
+    kind = json.optString("kind"),
+    address = json.optString("address"),
+    paired = json.optBoolean("paired"),
+    online = json.optBoolean("online"),
+    lastSync = json.optString("lastSync"),
+    selfDevice = json.optBoolean("selfDevice"),
+)
+
+private fun parseSyncLog(json: JSONObject) = SyncLogRow(
+    at = json.optString("at"),
+    peer = json.optString("peer"),
+    ok = json.optBoolean("ok"),
+    message = json.optString("message"),
 )
 
 private fun JSONObject.longOrNull(name: String): Long? =

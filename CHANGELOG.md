@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.5.0 — 同步: the shell's half of the LAN protocol, and a page to drive it
+
+`quire-core` has shipped the whole sync protocol since the beginning of this
+project — the HTTP server, UDP discovery, the version-2 snapshot and the
+three-way merge — and no shell here wired it. This slice wires it, and adds the
+two halves the core leaves to a shell (ADR-0016).
+
+### A 同步 destination
+
+- A fourth drawer row, and a page of its own: a discovery banner, 本机 address and
+  id, **已配对的设备** (在线/离线, 上次同步, 立即同步, 忘记), **已发现的设备**
+  (发起配对), 按地址添加 for a network where the announcement cannot get through,
+  the interval presets (10 秒 / 1 分 / 5 分 / 30 分 / 仅手动), 本机别名, and the last
+  dozen log lines.
+- **Opening the page is what puts this device on the LAN.** The engine — four
+  threads and a listening socket — starts on the first request, so an app that
+  never shows 同步 still listens on nothing.
+
+### The two halves the core leaves out
+
+- `rust/src/sync.rs`: the snapshot is read out of the workspace (flush, then the
+  file), and a merged snapshot is written back — `replace_all` for the document
+  half with `meta`/`settings` handed back untouched, and row-level `Change`s for
+  the organizer, which is not part of a `PersistedState`. The session then
+  rebuilds what it holds in memory and drops the undo stacks.
+- The engine's jobs are answered on the existing one-second tick, so no second
+  timer exists; a step that cannot be answered drops its reply channel, so a peer
+  fails loudly rather than being handed an empty workspace.
+- Identity, the peer book, the log and the per-peer shadows are the same
+  `sync.*` `settings` rows the desktop and Slint shells already use, so a library
+  carried between shells keeps its pairings.
+
+### What it deliberately will not do
+
+- **A library with a database or an attachment refuses to sync**, and says why on
+  the page. This shell models neither, and a snapshot that dropped them would make
+  a peer's merge read the absence as a deletion — so the engine is not started and
+  an inbound snapshot carrying either is refused. Losing a user's databases to a
+  phone is not a bug worth shipping.
+- The read-only LAN **share** (port 5877) is still not wired, and neither are the
+  reference app's pairing codes, conflict lists, per-device statistics or
+  cloud/backup/WiFi-transfer siblings — `quire-core` has none of those.
+
+### Also
+
+- `SyncModelTest` pins the bridge's `sync` block key by key: it is a contract
+  between two languages that no compiler checks. Real `org.json` is on the test
+  classpath for it (the framework's is a stub under a JVM test).
+- Two Rust tests: the gate, and an export → merge → apply → re-export round trip
+  that asserts a peer's change lands, that a comment arrives carrying its ref, and
+  that the `settings` rows survive the bulk replace.
+
 ## 0.4.0 — 收件箱 as home, an instant capture, undo-able deletes, and 引用
 
 The alignment pass against the reference app (ADR-0015): four things this shell

@@ -17,6 +17,7 @@ use quire_core::core::organizer::OrganizerCatalog;
 use quire_core::core::types::ColorKind;
 use quire_core::core::{Block, BlockId, Document, PageId};
 
+use crate::sync::SyncView;
 use crate::workspace::Workspace;
 
 /// One sidebar row.
@@ -113,6 +114,10 @@ pub struct View {
     /// sorts and the row badges are computed in Kotlin from this, which is what
     /// keeps a filter change off the bridge entirely.
     pub org: OrgCatalog,
+    /// LAN sync's own state: this device, the peer book, the log, the timer. Its
+    /// own block rather than fields beside `theme`, because 同步 is a destination
+    /// with a screen of its own.
+    pub sync: SyncView,
 }
 
 /// The organizer's catalog as the wire carries it. Not a mirror of the core's
