@@ -4,6 +4,88 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0013 · The area is a second destination, and a list's verbs are a long press
+
+Decision: SPEC §四十一's 笔记 and 任务 are a **second top-level area** reached from
+two drawer rows, not a screen inside the document. The document is not replaced —
+leaving and returning finds it exactly as it was. Inside the area, the tab that is
+showing stays lit even in a row's own form, the system's back gesture walks out of
+the row's form and then out of the area, and a stored list's rename / recolour /
+delete are behind a **long press on its chip**.
+
+Why: `UIState.active-area` is the desktop's and the Rust shell's shape, and it is
+the right one for a *top-level* thing — a note is not a kind of page and a task is
+not a block (that is the core's own decision), so the shell must not nest one
+inside the other. The back gesture is the platform's own "up one level", and a
+phone has no other one; leaving it to the Activity's default would put a document
+edit and an area step on the same key.
+
+The long press is the same vocabulary the sidebar already uses for a page, and it
+is here rather than a chip-adjacent button because a chip row on a phone is
+already tight. It closes a real gap: the Slint shells declare
+`org-list-name-set`, `org-list-color-set` and `org-list-deleted` and never invoke
+them, so a list can be created there and never renamed. The three writes exist in
+the core and in `org.rs`; this is the shell that wires them.
+
+Consequences: `OrganizerBar` replaces the document's top bar (it carries the two
+tabs, the ＋ and the area's own undo/redo). The tabs are lit unconditionally, which
+is a deliberate departure from the Slint copy's `selected: tab == x && !in-detail`
+— an area with neither tab lit leaves the user guessing which half they are in.
+A list's count in the delete confirmation is the catalog's own ("N 项任务会移进收集箱"),
+because the command moves them in the same undoable step.
+
+## ADR-0012 · The organizer's 今天 is the device's own day, not UTC
+
+Decision: `ui/OrgModel.kt` takes "today" from the device's local calendar
+(`Calendar.getInstance()` plus a day offset), not from `now / 86_400`.
+
+Why: the Rust shell's `OrgDates::now` divides unix seconds by 86 400, which is the
+**UTC** day. East of Greenwich that is wrong for a large part of every day: at
+01:00 in UTC+8 it calls yesterday "today", so a task due today is filed under
+近七天 and its badge says yesterday's date. The row's badge and the 今天 filter are
+the one place in this app where the user's own clock is the authority — they typed
+the date against the calendar on their wall.
+
+Consequences: this is a **deliberate difference from the Rust shell**, not an
+accident, and the two shells can disagree about which task is "today" while
+standing in the same time zone east or west of UTC. The comparison itself is
+unchanged — ISO strings compare as dates because the format is fixed-width. Still
+one clock read per redraw (`OrgModel.Dates.now()` is remembered against the
+catalog), so the filter and every badge in one frame cannot straddle midnight.
+`java.time` is deliberately not used: minSdk is 24 and desugaring is not enabled.
+
+## ADR-0011 · The organizer crosses as a catalog; the document crosses as a view
+
+Decision: the organizer's rows go over the bridge whole — `view::org_catalog`
+sends every note, task and list with no filtering, sorting or derived fields — and
+`ui/OrgModel.kt` derives the five smart views, the three sorts, the deadline
+labels, the chips and the board. The document keeps the opposite shape: `view.rs`
+sends rows that are already decided.
+
+Why: the two have different interaction profiles. Every document edit *is* a
+command through the core's funnel, so a reply is the natural re-projection point,
+and a keystroke is answered with `{"ok":true}` and no rows at all. The organizer's
+*filters* — tab, view, list, sort, needle, show-done — are not edits: they are
+facts about the window (`UIState` on the desktop, `ADR-0073`'s rule), and sending
+each one over the bridge would put a round trip and a full catalog of JSON on
+every keystroke of the search box to compute something the shell already has all
+of the inputs for. The Rust shell agrees and keeps the same rules in its own
+`src/app/state.rs`; no version of `quire-core` knows what 今天 means.
+
+Consequences: the projection rules exist twice in the repository's *family* — once
+in Rust for the Slint shells, once in Kotlin here — and a rule changed in one is a
+rule changed in the other. The mitigation is the same one the mark offsets have:
+`OrgModelTest` asserts the rules that can be wrong without looking wrong (the
+week's boundary, the undated-last sort, the inbox fold for a dangling list, a
+finished task never being overdue), with the assertions the Rust shell makes.
+
+Every organizer **write** still crosses, and answers with the whole view. That is
+not the cheap answer — an edit echoes the catalog back — but it is the correct
+one: the row's `edited` instant is stamped on the Rust side, a task may have
+changed which views it belongs to, and the chip counts moved. The two fields a
+person types into are debounced for 300 ms on the Kotlin side, which is what keeps
+that off the keystroke path.
+
 ## ADR-0010 · One signing identity, named in the build, used for release and debug alike
 
 Decision: releases are signed with `C:\Users\ted\keystores\debug.keystore` — the

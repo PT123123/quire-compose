@@ -6,11 +6,13 @@ protocol crosses between them.**
 ```
 ┌───────────────────────────── app (Kotlin) ─────────────────────────────┐
 │ MainActivity        edge-to-edge; the foreground signal the writer needs│
-│   QuireApp          theme + startup state + the shell                   │
-│     Sidebar         the page tree, favorites, recents, settings entry   │
+│   QuireApp          theme + startup state + the two top-level areas      │
+│     Sidebar         the page tree, favorites, recents, settings entry    │
 │     EditorScreen    the page's title and its block rows                 │
+│     OrganizerScreen SPEC §四十一: 笔记 and 任务, list + board + a row's form│
+│       OrgModel      the projections: five views, three sorts, badges     │
 │     Sheets          block menu, page menu, settings, dialogs            │
-│   QuireViewModel    the last view, and every operation — one at a time  │
+│   QuireViewModel    the last view, the area's own filters, every op      │
 │     Bridge          typed methods → one JSON request each               │
 │     Native          four `external` declarations                        │
 └───────────────────────────────┬─────────────────────────────────────────┘
@@ -19,7 +21,8 @@ protocol crosses between them.**
 │ lib.rs              the four exported symbols, panic → reply            │
 │   session.rs        Request → Command, or a page Change                 │
 │     workspace.rs    the page tree (no core commands exist for pages)    │
-│     view.rs         the projection: rows, marks, flags                  │
+│     org.rs          SPEC §四十一's writes: ids, the clock, the funnel   │
+│     view.rs         the projection: rows, marks, flags, the catalog     │
 │       Document / History / SqliteRepository / PersistenceService        │
 └───────────────────────────────┬─────────────────────────────────────────┘
                                 │  pinned git rev
@@ -88,6 +91,46 @@ levels (a child's key sits between its parent's and its parent's next sibling's)
 and only the parent pointers say which is which. Descendants of a folded block
 are omitted, and a block whose parent is not on the page — a torn write — is
 shown at depth 0 rather than dropped.
+
+## Two projections, and the split between them
+
+This shell carries **two** projections, and they are deliberately shaped
+differently (ADR-0011):
+
+- **The document's is a view.** `view.rs` sends `PageRow`/`BlockRow` — already
+  decided: which pages are rows, which blocks are visible, what each mark's
+  offsets are. The editor draws what it is handed.
+- **The organizer's is a catalog.** `view::org_catalog` sends the *rows* — every
+  note, task and list, with no filter, no sort and no derived badge — and
+  `ui/OrgModel.kt` derives the five smart views, the three sorts, the deadline
+  labels and the board from them.
+
+The difference is a question of where interaction lives. A block edit is a
+document edit: it goes through the core's command funnel, and a reply is the
+honest moment to re-project. An organizer *filter* is not an edit at all — which
+tab, which list, which sort, the needle in the search box — so sending each one
+across the bridge would put a round trip and a few hundred rows of JSON on every
+keystroke, to compute something the shell already has every input for. The
+projection rules are in Kotlin for the same reason the Rust shell keeps them in
+its own `src/app/state.rs`: they are the *app layer's* rules, and neither
+platform's core knows them.
+
+What still crosses for the organizer is every **write**, because a write is what
+needs the core: ids allocated once, instants stamped once, the command funnel and
+the area's own undo stack. `org.rs` holds the catalog for exactly one reason —
+`Command::UpdateTask` is handed the row *before* and the row *after*, and only the
+owner of the catalog has the first of those.
+
+## The organizer's own stack
+
+SPEC §四十一's area gets its own undo with no new mechanism: `core::ORGANIZER_STACK`
+is a `PageId` no page can hold (`u64::MAX`, while page ids are allocated from a
+`HashMap`'s max + 1), so `History` — already one stack per page — keeps the area's
+steps apart from every document's. A 撤销 in the area walks the area's entries and
+a 撤销 in the editor walks the open page's, and neither list can contain the
+other's steps. The bridge reports the two answers separately (`canUndo`/`canRedo`
+and `orgCanUndo`/`orgCanRedo`), because a button lit by the wrong stack is a
+button that does nothing.
 
 ## What is deliberately not here
 

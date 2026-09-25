@@ -42,11 +42,14 @@ app/                    the Compose app (Kotlin)
     QuireViewModel.kt   the session's owner: one call at a time, one writer clock
     bridge/             the typed face of the Rust bridge (JSON in, JSON out)
     ui/                 the palette, the icons, and the screens
+      OrgModel.kt       SPEC §四十一's projections: views, sorts, badges, board
+      Organizer.kt      the 笔记 / 任务 area
   src/test/             the unit tests that need no device
 rust/                   the bridge crate: cdylib + rlib, JNI, `cargo test` on the host
   src/lib.rs            the four exported symbols
   src/session.rs        every operation the shell can ask for
   src/workspace.rs      the page tree (the core has no page commands)
+  src/org.rs            the organizer's writes, ids, clock and undo stack
   src/view.rs           the projection the UI redraws
 ```
 
@@ -80,7 +83,9 @@ the defaults on a machine that keeps its identity somewhere else.
 
 ## What works today
 
-The first slice, end to end: **the page tree and the block editor.**
+Two slices, end to end: **the document** and **the organizer**.
+
+**The page tree and the block editor.**
 
 - Open/create a library; the page tree with nesting, favorites, recents and
   per-branch folding; create, rename, delete (subtree and all), favorite and
@@ -90,6 +95,20 @@ The first slice, end to end: **the page tree and the block editor.**
   the next block, the ⋮ handle for the block menu (kind, move, indent, delete),
   undo and redo, and inline marks (bold, italic, strike, code, links) painted
   from the core's own byte offsets.
+
+**SPEC §四十一's 笔记 and 任务**, reached from the drawer.
+
+- Notes: title, body, tags, pin, excerpt and age; a tag column; pinned-first
+  ordering; a ＋ that opens the new note with the caret in its title.
+- Tasks: the five smart views (收集箱 / 今天 / 近七天 / 全部 / 已完成), three sorts,
+  per-tab search, the quick-add line, the detail form (list, priority, deadline,
+  repeat, tags, notes, checklist), and a footer with 显示已完成 and 已完成 X / Y.
+- **平铺**: one column per list on cards, with a long-press drag to move a task
+  between lists — and the same move in the row's ⋯.
+- Lists: create, rename, recolour, delete (its tasks move to the inbox in one
+  undoable step).
+- **Its own undo and redo.** The area has a stack of its own
+  (`core::ORGANIZER_STACK`), so a 撤销 in 笔记 can never reach a page's edits.
 - Light and dark themes in the shell's own palette, `跟随系统` by default, in
   Settings rather than on the main screen.
 - Everything above is persisted through `quire-core`'s change stream, debounced
@@ -104,19 +123,27 @@ Said plainly, because a shell that pretends is worse than one that is small:
   deleted but not edited. The desktop's `DatabaseView` is the largest single
   component it has, and it has not been ported.
 - **Images and files** show their attachment id, not the picture.
-- **The notes & tasks organizer** (SPEC §四十一) is not here at all.
-- **Search** (the palette or the find bar) is not here.
+- **Search** is the organizer's own two needles and nothing else — no page
+  palette and no in-page find bar.
 - **LAN share and sync** are not wired, though `quire-core` ships both.
 - **Backspace on an empty block** does not merge it into the one above: a soft
   keyboard's backspace is not a key event a Compose text field can see. Deleting
-  an empty block goes through the block menu.
+  an empty block goes through the block menu. (The organizer's fields do not need
+  it: a note's body is one plain-text field.)
+- **A repeating task does not roll forward** when it is completed. The rule is
+  stored and shown; v1 deliberately does not fake the roll by rewriting the
+  deadline, which would be a derived write with no undo of its own.
 
 ## Development notes
 
 - The bridge's protocol is testable without a device: `just bridge` drives the
-  same `Session` the JVM drives, over the same JSON. The mark offsets, which are
-  bytes in the database and UTF-16 indices in Compose, have their own unit test
-  (`app/src/test/.../MarksTest.kt`).
+  same `Session` the JVM drives, over the same JSON.
+- Two things in Kotlin have unit tests, both of them things that can be wrong
+  without looking wrong: the mark offsets, which are bytes in the database and
+  UTF-16 indices in Compose (`MarksTest.kt`), and the organizer's projection
+  rules — the week's boundary, the undated-last sort, the dangling-list fold to
+  the inbox, the chip row lighting exactly one half of the selector
+  (`OrgModelTest.kt`).
 - `just android-lib` builds only the `.so`; the Rust side's loop is `cargo test`
   in `rust/`.
 - Version lives in one place, `gradle.properties`' `quire.version`;
