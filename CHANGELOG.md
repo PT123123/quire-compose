@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.3.0 — the organizer, rebuilt to look like the app it was ported from
+
+The shape of the 笔记 / 任务 slice was wrong: it was the Slint shell's, not the
+reference app's. Three things were put right (ADR-0013, ADR-0014).
+
+### 收件箱 and 任务 are two pages, not two tabs
+
+- The 笔记 / 任务 chips are gone. Each page has its own drawer row, its own toolbar
+  and its own state; the drawer is the only thing between them.
+- 收件箱's toolbar: 搜索 · 排序（最新创建 / 最新更新 / 按内容）· 撤销 / 重做 · ⋯（清除过滤,
+  复制全部）.
+- 任务's toolbar: the same three, with its own five-item sort menu and ⋯（列表 /
+  平铺 / 新建清单）.
+- 搜索 is a toggle, as in the reference app: the field appears under the bar and
+  clearing it clears the filter.
+- The back gesture walks out of a row's form, then out of the page.
+
+### Capture floats
+
+- **The round ＋ opens a bottom sheet**, not a row in the list: a multi-line field,
+  a markdown toolbar (`#`, `B`, `/`, `•`, `1.`), a round ➤ and no cancel button —
+  a swipe down is one.
+- The toolbar's rules are `MarkdownText`'s, pure functions with their own tests:
+  a heading cycle that replaces a list marker instead of stacking on it, a bold
+  toggle that unwraps what it wrapped, and a `#`-scan that does not call "issue
+  #3" a tag named 3.
+- A `#token` being typed raises the tag suggestions above the field.
+- The draft lives in the view model: a sheet swiped away mid-sentence loses
+  nothing.
+- A note is created with its text **and** the tags its `#tokens` name in one
+  command (`orgAddNote`), and a task in one too (`orgQuickAdd` now carries tags) —
+  so one 撤销 puts the whole row away, with no half-built note in between.
+
+### A note is a card; a task is a glass row
+
+- Note cards: the text (up to eight lines), its tags on an accent line, its age
+  bottom-right, a ⚑ when pinned and a ⋯ in the corner. A note the desktop made
+  with a title and no body falls back to the title.
+- Task rows: title, then a meta line carrying the list's colour dot, the priority
+  glyph, the deadline badge, the checklist count, and the tags pushed right.
+- Both sit on a translucent "glass" plate (`QuireColors.card`), which is what the
+  reference app draws its rows on.
+- The footer is a 4 dp progress bar and 已完成 X / Y, not a chip row.
+- Four new sort slots for tasks — 最近添加 and 反向 alongside 默认排序 — matching the
+  reference app's own menu.
+
+### Also
+
+- `MarkdownTextTest`: 15 JVM tests over the toolbar's rules and the tag scan.
+- `OrgModelTest` grew the new sorts and the note card's fallback.
+- Fixed on the device: the notes tab's own bar clipped a squeezed title to "任"
+  (the view switch moved into the overflow and the title got a floor), and the
+  progress footer sat under the ＋.
+
 ## 0.2.0 — SPEC §四十一: 笔记 and 任务
 
 The organizer, which PLAN called M2 and the first slice shipped without. The

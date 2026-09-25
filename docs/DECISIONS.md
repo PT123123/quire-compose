@@ -4,35 +4,78 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
-## ADR-0013 · The area is a second destination, and a list's verbs are a long press
+## ADR-0013 · 收件箱 and 任务 are two destinations, and a list's verbs are a long press
 
-Decision: SPEC §四十一's 笔记 and 任务 are a **second top-level area** reached from
-two drawer rows, not a screen inside the document. The document is not replaced —
-leaving and returning finds it exactly as it was. Inside the area, the tab that is
-showing stays lit even in a row's own form, the system's back gesture walks out of
-the row's form and then out of the area, and a stored list's rename / recolour /
-delete are behind a **long press on its chip**.
+Decision: SPEC §四十一's notes and tasks are **two separate pages**, each reached
+from its own drawer row, each with its own toolbar and its own state. There is no
+tab strip between them and no shared bar. The document is not replaced — leaving
+and returning finds it exactly as it was. Inside 任务, the system's back gesture
+walks out of a row's form and then out of the page. A stored list's rename /
+recolour / delete are behind a **long press on its chip**.
 
-Why: `UIState.active-area` is the desktop's and the Rust shell's shape, and it is
-the right one for a *top-level* thing — a note is not a kind of page and a task is
-not a block (that is the core's own decision), so the shell must not nest one
-inside the other. The back gesture is the platform's own "up one level", and a
-phone has no other one; leaving it to the Activity's default would put a document
-edit and an area step on the same key.
+Why: this is what the reference app does. 收件箱 is a page with 搜索 / 排序 / 多选
+in its toolbar and a 标签 column; 任务 is another page with 搜索, 新建清单 and its sort
+menu, and its own 收集箱 / 今天 / 最近 7 天 chips. They are two screens in the
+drawer, not two tabs on one — so a shell that puts one strip over both is a shell
+that has to decide, on every control, which half it belongs to. Two destinations
+also means the state each one keeps (which view, which list, which needle) cannot
+be confused for the other's, and the back gesture has an unambiguous meaning in
+each.
 
-The long press is the same vocabulary the sidebar already uses for a page, and it
-is here rather than a chip-adjacent button because a chip row on a phone is
-already tight. It closes a real gap: the Slint shells declare
-`org-list-name-set`, `org-list-color-set` and `org-list-deleted` and never invoke
-them, so a list can be created there and never renamed. The three writes exist in
-the core and in `org.rs`; this is the shell that wires them.
+The first version of this shell put 笔记 / 任务 chips in one bar over one screen.
+That was the wrong shape, and it read as one: a *tab* is a control for switching
+between views of the same thing, which these are not.
 
-Consequences: `OrganizerBar` replaces the document's top bar (it carries the two
-tabs, the ＋ and the area's own undo/redo). The tabs are lit unconditionally, which
-is a deliberate departure from the Slint copy's `selected: tab == x && !in-detail`
-— an area with neither tab lit leaves the user guessing which half they are in.
-A list's count in the delete confirmation is the catalog's own ("N 项任务会移进收集箱"),
-because the command moves them in the same undoable step.
+The long press is the same vocabulary the sidebar uses for a page, and it is here
+rather than a chip-adjacent button because a chip row on a phone is already tight.
+It closes a real gap: the Slint shells declare `org-list-name-set`,
+`org-list-color-set` and `org-list-deleted` and never invoke them, so a list can be
+created there and never renamed. The three writes exist in the core and in
+`org.rs`; this is the shell that wires them.
+
+Consequences: `NotesBar` and `TasksBar` are separate composables — different
+titles, different actions, different menus — and `openNotes()` / `openTasks()`
+reset the destination's own state on the way in. 列表/平铺 lives in 任务's overflow
+menu rather than the bar: the desktop's copy puts it in the card's header, and on a
+phone the bar has no room for it beside 搜索, 排序 and the undo pair (a squeezed
+title is the price of trying — it read as "任"). A list's task count in the delete
+confirmation is the catalog's own, because the command moves them in the same
+undoable step.
+
+## ADR-0014 · A note is one field, and capture is a floating sheet
+
+Decision: a note on this shell is **one blob of text**, created and edited in a
+**floating capture sheet** — a bottom sheet carrying a multi-line field, a markdown
+toolbar (`#`, `B`, `/`, `•`, `1.`), a ➤ send button and nothing else. There is no
+cancel button. The field's `#tokens` become the note's tags, and the core's `title`
+field is left empty.
+
+Why: again the reference app. Its capture window is a floating sheet whose bottom
+row is exactly that toolbar plus a send glyph, and its note model is a single text
+field — `NoteCard` renders the content, then the tags, then the age, with no title
+anywhere. A note with a title *and* a body would be this shell inventing a second
+model and then showing both on a screen that has room for one.
+
+Three details are load-bearing rather than decorative. `#`, `B` and the two list
+keys are text operations with rules that are easy to get *nearly* right (a heading
+cycle that eats a list marker, a bold toggle that doubles a mark), so they live in
+`MarkdownText` as pure functions with their own unit tests. ➤ is one glyph so the
+toolbar has the width. And nothing commits until ➤: the sheet is a draft, and its
+text lives in the view model, so a swipe-away loses nothing.
+
+Consequences: the core's `title` stays empty for a note made here, and the
+desktop's list shows it as 无标题 above the body's first line. Deriving a title from
+the first line would paint that line twice on the desktop — worse than a
+placeholder. Notes and tasks are created with **one** command
+(`orgAddNote` / `orgQuickAdd`, both carrying the text and its tags), because the
+sheet produces one thing and a create-then-fill would leave a blank row on the undo
+stack and cost three presses of 撤销 to put away. A note the desktop made with a
+title and no body still reads here: the card falls back to the title.
+
+**Not ported from the reference app**: multi-select (选择 / 多选) with its bulk
+pin, tag and delete. It is a mode with its own toolbar, its own selection model and
+its own undo story, and it is listed in the README's "what does not work yet"
+rather than half-built.
 
 ## ADR-0012 · The organizer's 今天 is the device's own day, not UTC
 

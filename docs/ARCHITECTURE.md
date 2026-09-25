@@ -6,13 +6,16 @@ protocol crosses between them.**
 ```
 ┌───────────────────────────── app (Kotlin) ─────────────────────────────┐
 │ MainActivity        edge-to-edge; the foreground signal the writer needs│
-│   QuireApp          theme + startup state + the two top-level areas      │
+│   QuireApp          theme + startup state + the three destinations      │
 │     Sidebar         the page tree, favorites, recents, settings entry    │
 │     EditorScreen    the page's title and its block rows                 │
-│     OrganizerScreen SPEC §四十一: 笔记 and 任务, list + board + a row's form│
-│       OrgModel      the projections: five views, three sorts, badges     │
+│     NotesPage       SPEC §四十一's 收件箱: note cards, tag chips, cards  │
+│     TasksPage       SPEC §四十一's 任务: chips, rows, board, detail      │
+│     ComposeSheet    the floating capture window and its toolbar          │
+│       MarkdownText  the toolbar's five text operations, and the tag scan │
+│       OrgModel      the projections: five views, eight sorts, badges     │
 │     Sheets          block menu, page menu, settings, dialogs            │
-│   QuireViewModel    the last view, the area's own filters, every op      │
+│   QuireViewModel    the last view, each destination's own filters        │
 │     Bridge          typed methods → one JSON request each               │
 │     Native          four `external` declarations                        │
 └───────────────────────────────┬─────────────────────────────────────────┘
@@ -102,24 +105,30 @@ differently (ADR-0011):
   offsets are. The editor draws what it is handed.
 - **The organizer's is a catalog.** `view::org_catalog` sends the *rows* — every
   note, task and list, with no filter, no sort and no derived badge — and
-  `ui/OrgModel.kt` derives the five smart views, the three sorts, the deadline
+  `ui/OrgModel.kt` derives the five smart views, the eight sorts, the deadline
   labels and the board from them.
 
 The difference is a question of where interaction lives. A block edit is a
 document edit: it goes through the core's command funnel, and a reply is the
 honest moment to re-project. An organizer *filter* is not an edit at all — which
-tab, which list, which sort, the needle in the search box — so sending each one
-across the bridge would put a round trip and a few hundred rows of JSON on every
-keystroke, to compute something the shell already has every input for. The
+smart view, which list, which sort, the needle in the search box — so sending each
+one across the bridge would put a round trip and a few hundred rows of JSON on
+every keystroke, to compute something the shell already has every input for. The
 projection rules are in Kotlin for the same reason the Rust shell keeps them in
 its own `src/app/state.rs`: they are the *app layer's* rules, and neither
 platform's core knows them.
 
 What still crosses for the organizer is every **write**, because a write is what
 needs the core: ids allocated once, instants stamped once, the command funnel and
-the area's own undo stack. `org.rs` holds the catalog for exactly one reason —
-`Command::UpdateTask` is handed the row *before* and the row *after*, and only the
-owner of the catalog has the first of those.
+the organizer's own undo stack. `org.rs` holds the catalog for exactly one reason
+— `Command::UpdateTask` is handed the row *before* and the row *after*, and only
+the owner of the catalog has the first of those.
+
+**A write is one row.** The capture sheet produces one thing — a note the user
+typed, with the tags its `#tokens` name — and it travels as **one** command
+(`orgAddNote`, `orgQuickAdd`), not a create followed by two updates. Three
+commands would be three presses of 撤销 to put one note away, and the first of them
+would leave a blank row on the stack that nobody asked for (ADR-0014).
 
 ## The organizer's own stack
 

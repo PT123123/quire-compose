@@ -43,7 +43,8 @@ app/                    the Compose app (Kotlin)
     bridge/             the typed face of the Rust bridge (JSON in, JSON out)
     ui/                 the palette, the icons, and the screens
       OrgModel.kt       SPEC §四十一's projections: views, sorts, badges, board
-      Organizer.kt      the 笔记 / 任务 area
+      MarkdownText.kt   the capture toolbar's text operations and the tag scan
+      Organizer.kt      the 收件箱 and 任务 pages and the capture sheet
   src/test/             the unit tests that need no device
 rust/                   the bridge crate: cdylib + rlib, JNI, `cargo test` on the host
   src/lib.rs            the four exported symbols
@@ -96,19 +97,24 @@ Two slices, end to end: **the document** and **the organizer**.
   undo and redo, and inline marks (bold, italic, strike, code, links) painted
   from the core's own byte offsets.
 
-**SPEC §四十一's 笔记 and 任务**, reached from the drawer.
+**SPEC §四十一's 收件箱 and 任务**, reached from the drawer as two separate pages.
 
-- Notes: title, body, tags, pin, excerpt and age; a tag column; pinned-first
-  ordering; a ＋ that opens the new note with the caret in its title.
-- Tasks: the five smart views (收集箱 / 今天 / 近七天 / 全部 / 已完成), three sorts,
-  per-tab search, the quick-add line, the detail form (list, priority, deadline,
-  repeat, tags, notes, checklist), and a footer with 显示已完成 and 已完成 X / Y.
+- **收件箱**: notes as cards — the text, its tags on an accent line, its age —
+  with a tag chip row, a hideable search field, and 排序（最新创建 / 最新更新 / 按内容）.
+- **Capture floats.** The round ＋ opens a bottom sheet with a multi-line field, a
+  markdown toolbar (`#`, `B`, `/`, `•`, `1.`), a ➤ send and tag suggestions; a
+  note's `#tokens` become its tags, and one 撤销 puts the whole note away.
+- **任务**: the five smart views (收集箱 / 今天 / 近七天 / 全部 / 已完成), five sorts
+  behind ⇅, per-page search, glass rows carrying the list's dot, the priority, the
+  deadline and the tags, and a 4 dp progress bar with 已完成 X / Y.
+- The task detail form: list, priority, deadline, repeat, tags, notes and a
+  checklist.
 - **平铺**: one column per list on cards, with a long-press drag to move a task
   between lists — and the same move in the row's ⋯.
 - Lists: create, rename, recolour, delete (its tasks move to the inbox in one
   undoable step).
-- **Its own undo and redo.** The area has a stack of its own
-  (`core::ORGANIZER_STACK`), so a 撤销 in 笔记 can never reach a page's edits.
+- **Its own undo and redo.** The organizer has a stack of its own
+  (`core::ORGANIZER_STACK`), so a 撤销 in 收件箱 can never reach a page's edits.
 - Light and dark themes in the shell's own palette, `跟随系统` by default, in
   Settings rather than on the main screen.
 - Everything above is persisted through `quire-core`'s change stream, debounced
@@ -129,10 +135,16 @@ Said plainly, because a shell that pretends is worse than one that is small:
 - **Backspace on an empty block** does not merge it into the one above: a soft
   keyboard's backspace is not a key event a Compose text field can see. Deleting
   an empty block goes through the block menu. (The organizer's fields do not need
-  it: a note's body is one plain-text field.)
+  it: a note is one plain-text field.)
+- **Multi-select** in 收件箱 / 任务 (选择 / 多选, with bulk pin, tag and delete) is not
+  here. The reference app has it and it is a mode with its own toolbar, selection
+  model and undo story — half of one would be worse than none (ADR-0014).
 - **A repeating task does not roll forward** when it is completed. The rule is
   stored and shown; v1 deliberately does not fake the roll by rewriting the
   deadline, which would be a derived write with no undo of its own.
+- **A note's text is plain text**, not rendered markdown: the toolbar writes the
+  markers, and the card shows them as written. The task half is where the format
+  work went.
 
 ## Development notes
 
@@ -144,6 +156,10 @@ Said plainly, because a shell that pretends is worse than one that is small:
   rules — the week's boundary, the undated-last sort, the dangling-list fold to
   the inbox, the chip row lighting exactly one half of the selector
   (`OrgModelTest.kt`).
+- A third is the capture toolbar's text operations (`MarkdownTextTest.kt`): a
+  heading cycle that eats a list marker, a bold toggle that doubles a mark, and a
+  `#`-scan that calls "issue #3" a tag are all *nearly* right in a way nobody
+  notices until the notes are full of stray asterisks.
 - `just android-lib` builds only the `.so`; the Rust side's loop is `cargo test`
   in `rust/`.
 - Version lives in one place, `gradle.properties`' `quire.version`;

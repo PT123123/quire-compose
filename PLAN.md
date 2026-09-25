@@ -35,28 +35,40 @@
 
 ## M2 · The organizer — ✅
 
-SPEC §四十一, and the slice PLAN named before M1 was even finished.
+SPEC §四十一, and the slice PLAN named before M1 was even finished. Rebuilt once
+(0.3.0) after the first cut turned out to be the Slint shell's shape rather than
+the reference app's.
 
-- [x] Two drawer rows (笔记 / 任务) into a second top-level area, with the document
-      left exactly where it was (ADR-0013)
+- [x] Two drawer rows into **two separate pages** — 收件箱 and 任务, each with its
+      own toolbar and state, with the document left exactly where it was
+      (ADR-0013)
 - [x] `rust/src/org.rs`: the area's writes on `core::ORGANIZER_STACK` — its own
       undo and redo, never the open page's
 - [x] The reply carries the catalog; `ui/OrgModel.kt` derives the five smart views,
-      the three sorts, the deadline labels, the chips and the board (ADR-0011)
-- [x] 笔记: title, body, tags, pin, excerpt, age, tag column, and a ＋ that puts the
-      caret in the new note's title
-- [x] 任务: 收集箱 / 今天 / 近七天 / 全部 / 已完成, the three sorts, one needle per
-      tab, the quick-add line, the footer's 显示已完成 switch and 已完成 X / Y
-- [x] The detail form: 清单 / 优先级 / 截止 (with 今天 and 清除) / 重复 / 标签 /
-      备注 / 子任务, and 删除
+      the five task sorts, the three note sorts, the deadline labels, the chips and
+      the board (ADR-0011)
+- [x] 收件箱: **note cards** — the text, its tags on an accent line, its age, a ⚑ and
+      a ⋯ — a tag chip row, a hideable search field, and 排序（最新创建 / 最新更新 /
+      按内容）
+- [x] **Capture floats**: the round ＋ opens a bottom sheet with a multi-line field,
+      a markdown toolbar (`#`, `B`, `/`, `•`, `1.`), a ➤ send, tag suggestions, and
+      a draft that survives a swipe-away (ADR-0014)
+- [x] A note is one command carrying its text and its `#tokens` as tags; a task is
+      one carrying its title, its tags and (in 今天) its deadline
+- [x] 任务: 收集箱 / 今天 / 近七天 / 全部 / 已完成, five sorts behind ⇅, one needle per
+      page, glass rows with the list dot / priority / deadline / checklist / tags,
+      and a 4 dp progress bar with 已完成 X / Y
+- [x] The task detail: 清单 / 优先级 / 截止 (with 今天 and 清除) / 重复 / 标签 / 备注 /
+      子任务, and 删除
 - [x] 平铺: one column per list, a long-press drag between columns, and the same
       move in the row's ⋯
 - [x] Lists: create, rename, recolour, delete — the three writes the Slint shells
-      declared and never wired, and the delete files its tasks in the inbox in one
-      step
-- [x] 14 more bridge tests and 22 JVM projection tests (`OrgModelTest`)
-- [x] Verified on the device: the drawer, both tabs, the quick-add, the detail
-      form, the board, a drag between columns, the row menu and the list dialog
+      declared and never wired
+- [x] 37 bridge tests and 42 JVM tests (`OrgModelTest`, `MarkdownTextTest`)
+- [x] Verified on the device: both pages, the toolbars, the capture sheet and its
+      toolbar, a note sent with a `#tag` and the card it made, the task chips and
+      footer. The final pass (the tasks bar and footer fixes) was cut short by the
+      device's lock screen.
 
 ## Next (not started)
 
@@ -67,23 +79,24 @@ M2 were:
   single piece of the desktop shell, and the one that most needs the phone's own
   gestures rather than a port.
 - **M4 · Search**: the page palette and the in-page find bar, over the core's
-  FTS5 index.
+  FTS5 index. (The organizer's own two needles are not that search.)
 - **M5 · Attachments**: import through the system picker (SAF), thumbnails, and
   image blocks that show a picture.
 - **M6 · LAN share and sync**: `quire-core` ships both; neither is wired.
-- **The organizer's tail**: rolling a completed repeating task forward (the core
-  stores the rule and shows it; v1 does not fake the roll), and a note body that
-  renders more than plain text if a second content format is ever wanted.
+- **The organizer's tail**: multi-select with its bulk pin / tag / delete
+  (ADR-0014 says why it was left out), rolling a completed repeating task forward,
+  and a note body that renders more than plain text if a second content format is
+  ever wanted.
 
 ## Verification notes
 
 - `cargo test` in `rust/` is the bridge's gate and runs in seconds.
-- `:app:testDebugUnitTest` covers the two things in Kotlin that can be wrong
-  without looking wrong: the byte/UTF-16 mark conversion (`MarksTest`) and the
-  organizer's projection rules (`OrgModelTest`). Everything else in the UI is
-  verified by building, installing and using it on the device — the honest state
-  of a shell with no headless renderer (the Rust shell's answer was 140 swept
-  scenes; this one would need an instrumented test suite, and that is not these
-  slices).
+- `:app:testDebugUnitTest` covers the three things in Kotlin that can be wrong
+  without looking wrong: the byte/UTF-16 mark conversion (`MarksTest`), the
+  organizer's projection rules (`OrgModelTest`), and the compose toolbar's text
+  operations (`MarkdownTextTest`). Everything else in the UI is verified by
+  building, installing and using it on the device — the honest state of a shell
+  with no headless renderer (the Rust shell's answer was 140 swept scenes; this one
+  would need an instrumented test suite, and that is not these slices).
 - The release APK is signed by the key `keystore.properties` names, which lives
   outside every repository (ADR-0009's sibling note in `app/build.gradle.kts`).
