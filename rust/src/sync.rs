@@ -861,6 +861,15 @@ impl Session {
         let merged = outcome.merged;
         drop(ctx);
 
+        // The merge's **conflicts** — both sides edited the same row, so the local
+        // copy won and the peer's was dropped — are the one thing that happened in a
+        // sync the page cannot otherwise explain: the row is not what the other
+        // device shows, and nothing said why. They go into the log the page already
+        // draws, which is this shell's version of the reference app's 冲突 list.
+        for conflict in &outcome.conflicts {
+            self.sync_log_push(&peer_name, true, &format!("冲突：{conflict}")).ok();
+        }
+
         // The document half, as one `PersistedState`. `meta` and `settings` are
         // read out first and handed straight back: `replace_all` deletes those two
         // tables, and the peer book and this device's identity live in them.
@@ -1102,6 +1111,62 @@ mod tests {
             !session.sync_self_info().id.is_empty(),
             "and so must this device's identity"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A conflict the merge settled in this device's favour is **said out loud**.
+    ///
+    /// Both sides edited the same row, so the local copy won and the peer's was
+    /// dropped — and without a line in the log nothing on the 同步 page could
+    /// explain why the two devices disagree about that row. This is the shell's
+    /// version of the reference app's 冲突 list.
+    #[test]
+    fn a_merge_conflict_is_written_to_the_sync_log() {
+        let dir = scratch("conflict-log");
+        let mut session = Session::open(dir.to_str().unwrap()).expect("open");
+        session.dispatch(r#"{"op":"orgAddNote","body":"原始"}"#);
+
+        let local = session.sync_export().expect("export");
+        assert_eq!(local.notes.len(), 1);
+        session.sync_store_shadow("peer-1", &local).expect("shadow");
+
+        // The peer changed the note's text…
+        let mut remote = local.clone();
+        remote.device_id = "peer-1".into();
+        remote.device = "Peer".into();
+        for note in &mut remote.notes {
+            note.body = "对端改的".into();
+        }
+        // …and so did this device, after the shadow was taken: an edit against an
+        // edit is the one shape the merge cannot settle by itself.
+        let id = local.notes[0].id;
+        session.dispatch(&format!(
+            r#"{{"op":"orgNoteContent","note":{id},"body":"本机改的","tags":""}}"#
+        ));
+
+        let peer = PeerRecord {
+            id: "peer-1".into(),
+            name: "Peer".into(),
+            kind: "windows".into(),
+            ip: "127.0.0.1".into(),
+            port: SYNC_PORT,
+            paired: true,
+            last_seen: 0,
+            last_sync: String::new(),
+        };
+        let merged = session.sync_apply_remote(&remote, &peer).expect("apply");
+        let body = merged.notes.iter().find(|n| n.id == id).expect("the note").body.clone();
+        assert_eq!(body, "本机改的", "the local edit is the one that keeps");
+
+        let logged: Vec<String> = session
+            .sync_log()
+            .into_iter()
+            .filter(|l| l.message.starts_with("冲突："))
+            .map(|l| l.message)
+            .collect();
+        assert_eq!(logged.len(), 1, "one conflict, one line: {logged:?}");
+        assert!(logged[0].contains("note"), "and it names the row: {logged:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -52,6 +52,13 @@ Consequences:
   inside its 撤销 window is not on screen and is not in it.
 - The board is not selectable: it is a "what is left" view with no room for a
   selection bar, so its cards keep the plain tap and 多选 is the list's.
+- **The merge's conflicts reach the page.** `quire-core`'s merge has always answered
+  a `conflicts: Vec<String>` — both sides edited the same row, so the local copy wins
+  — and this shell dropped it. `sync_apply_remote` now writes one `冲突：…` line per
+  conflict into the log the 同步 page draws, which is this protocol's version of the
+  reference app's 冲突 list: a row the two devices disagree about is explainable
+  rather than mysterious. A dedicated 冲突 list and per-device statistics are still
+  not here.
 - **Still not here, and still named**: a persistent 回收站, 笔记历史 / 恢复版本,
   reminders, a note body that renders its markdown, and the reference app's cloud
   backup / WiFi transfer. Each needs something `quire-core` does not have (soft

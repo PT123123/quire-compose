@@ -134,8 +134,12 @@ where it was (ADR-0016).
       first `syncState`, so nothing listens until the page is opened
 - [x] Two Rust tests (the gate; export → merge → apply → re-export) and
       `SyncModelTest` pinning the wire keys
-- [ ] The read-only LAN share (port 5877), conflict lists, per-device statistics,
-      pairing codes, and the reference app's cloud / backup / WiFi-transfer pages
+- [x] The merge's **conflicts** reach the page: a conflict the merge settled in this
+      device's favour writes a `冲突：…` line into 最近记录, so a row the two devices
+      disagree about is explainable (ADR-0018's tail)
+- [ ] The read-only LAN share (port 5877), a 冲突 list of its own, per-device
+      statistics, pairing codes, and the reference app's cloud / backup /
+      WiFi-transfer pages
 
 ## Next (not started)
 

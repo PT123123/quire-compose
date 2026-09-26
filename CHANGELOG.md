@@ -42,6 +42,10 @@ the library this reads is the same one the other two shells read.
 
 ### Also
 
+- The merge's **conflicts** are no longer dropped on the floor: when both sides
+  edited the same row and the local copy won, a `冲突：…` line naming the row goes
+  into the 同步 page's 最近记录 — the reference app's 冲突 list, narrowed to the one
+  surface this protocol has. A Rust test pins it.
 - `OrgModelTest` grew seven tests: the subtree filter and its `项目2` boundary, the
   one-level chip row and its once-per-prefix count, the breadcrumb walk, and the
   title 转为待办 gives a note.
