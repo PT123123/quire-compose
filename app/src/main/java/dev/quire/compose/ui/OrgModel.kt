@@ -188,7 +188,10 @@ object OrgModel {
         val needle = query.trim().lowercase()
         val rows = catalog.notes
             .filter { noteMatches(it, needle) }
-            .filter { tag.isEmpty() || it.tags.any { candidate -> candidate == tag } }
+            // The empty path is no filter, and it has to be said out loud: `any` over
+            // a note that carries no tags at all is false, so a tagless note would be
+            // filtered out of 全部笔记 by a filter that is not there.
+            .filter { note -> tag.isEmpty() || note.tags.any { tagMatches(it, tag) } }
         return sortNotes(rows, sort)
             .map { noteRow(it, it.id == selected) }
     }
@@ -264,18 +267,100 @@ object OrgModel {
                 ),
         )
 
-    /** The 笔记 tab's tag column: a fold of the notes, most used first. */
-    fun tagChips(catalog: OrgCatalog): List<TagChip> {
-        val counts = LinkedHashMap<String, Int>()
-        for (note in catalog.notes) {
-            for (tag in note.tags) counts[tag] = (counts[tag] ?: 0) + 1
-        }
-        // Most-used first, then by name: a tag column is read by "what do I keep
-        // writing about", not alphabetically.
-        return counts.entries
+    /**
+     * The 笔记 tab's tag row: the direct children of the filter `path` — the top
+     * level when nothing is filtered — each with the number of notes at or under
+     * it, most used first.
+     *
+     * A tag is a **path** (`项目/工作/ActivityWatch`), and the row walks it the way
+     * the reference app's does: 项目 → 工作 → ActivityWatch is three taps, and the
+     * filter bar's ↑ is the way back. The count is the *subtree* count rather than
+     * the number of notes carrying the tag literally, because a chip has to say how
+     * many notes tapping it would leave on screen.
+     */
+    fun tagChips(catalog: OrgCatalog, path: String = ""): List<TagChip> =
+        tagCounts(catalog).entries
+            .filter { (full, _) -> tagParentPath(full).orEmpty() == path }
             .map { TagChip(it.key, it.value) }
             .sortedWith(compareByDescending<TagChip> { it.count }.thenBy { it.name })
+
+    /**
+     * Every tag prefix the notes carry, and how many notes sit at or under it.
+     *
+     * A note counts **once** per prefix however many of its tags pass through it:
+     * two tags under `项目` are still one note under `项目`, and counting it twice
+     * would make the chip a lie.
+     */
+    private fun tagCounts(catalog: OrgCatalog): LinkedHashMap<String, Int> {
+        val counts = LinkedHashMap<String, Int>()
+        for (note in catalog.notes) {
+            val prefixes = LinkedHashSet<String>()
+            for (tag in note.tags) {
+                val segments = tagSegments(tag)
+                for (end in 1..segments.size) prefixes += segments.subList(0, end).joinToString("/")
+            }
+            for (prefix in prefixes) counts[prefix] = (counts[prefix] ?: 0) + 1
+        }
+        return counts
     }
+
+    // ─── a tag is a path ────────────────────────────────────────────────────
+    //
+    // The reference app's 层级标签: a tag may be `项目/工作/ActivityWatch`, and every
+    // screen that shows or filters one has to agree on what its segments are. The
+    // rules are the reference app's (`tagSegments` / `tagParentPath` /
+    // `formatTagBreadcrumb`), kept here so both organizer pages, the capture
+    // overlay and the tests ask the same question.
+
+    /** A tag as its segments: `项目/工作` → [项目, 工作]. Empty segments are dropped. */
+    fun tagSegments(tag: String): List<String> =
+        tag.split('/').map { it.trim() }.filter { it.isNotEmpty() }
+
+    /** The parent path of a hierarchical tag; `null` for a single-segment one. */
+    fun tagParentPath(tag: String): String? {
+        val segments = tagSegments(tag)
+        return if (segments.size <= 1) null else segments.dropLast(1).joinToString("/")
+    }
+
+    /** A tag's breadcrumb: `项目/工作/xx` → `项目 / 工作 / xx`. */
+    fun tagBreadcrumb(tag: String): String = tagSegments(tag).joinToString(" / ")
+
+    /**
+     * A tag as a card or a chip paints it: `#项目 / 工作` — the `#` only on the front,
+     * because that is what the user typed and what the text's own `#token` is.
+     */
+    fun tagLabel(tag: String): String = "#" + tagBreadcrumb(tag)
+
+    /**
+     * Whether a tag sits at or under a filter path, on **segment boundaries**: `项目`
+     * keeps `项目` and `项目/工作` and drops `项目2`, which a plain prefix test would
+     * keep. An empty path is no filter and keeps everything.
+     */
+    fun tagMatches(candidate: String, path: String): Boolean =
+        path.isEmpty() || candidate == path || candidate.startsWith("$path/")
+
+    /**
+     * A note's title when it is turned into a task (转为待办): the note's own title if
+     * it has one, else its first non-empty line with the markdown that opens it
+     * stripped, cut to a length a task row can show. The reference app's own rule —
+     * a title that is a heading marker is not a title.
+     */
+    fun taskTitle(note: OrgNote): String {
+        val title = note.title.trim()
+        if (title.isNotEmpty()) return title.take(50)
+        return note.body.lineSequence()
+            .map(::stripLead)
+            .firstOrNull { it.isNotEmpty() }
+            ?.take(50)
+            .orEmpty()
+    }
+
+    /** A line with the markdown that opens it taken off: `## 会议` → `会议`. */
+    private fun stripLead(line: String): String =
+        line.trim()
+            .replace(Regex("^(?:[#>\\-*+]\\s*)+"), "")
+            .replace(Regex("^\\d+[.)、]\\s*"), "")
+            .trim()
 
     // ─── tasks ──────────────────────────────────────────────────────────────
 
@@ -456,7 +541,7 @@ object OrgModel {
             // counts lists — one line reading "2 项待办" over a list of notes would
             // be the window describing something it is not showing.
             val notes = notes(catalog, query, tag, sort = 0, selected = -1)
-            return (if (tag.isEmpty()) "全部笔记" else tag) to "${notes.size} 条笔记"
+            return (if (tag.isEmpty()) "全部笔记" else tagBreadcrumb(tag)) to "${notes.size} 条笔记"
         }
         if (mode == 1) {
             val columns = board(catalog, query, sort = 0, dates = dates)

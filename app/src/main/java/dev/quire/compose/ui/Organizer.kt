@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
@@ -150,6 +152,36 @@ fun organizerInDetail(vm: QuireViewModel): Boolean =
 fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
     var sortOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    val catalog = vm.view?.org ?: OrgCatalog.Empty
+    if (vm.orgSelecting) {
+        // 全选 covers what the page is *showing*: the filter is what the user is
+        // looking at, and a 全选 that reached past it would be a lie about the rows
+        // it lit. A row inside its 撤销 window is not on screen, so it is not in it.
+        val clipboard = LocalClipboardManager.current
+        val shown = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, vm.pendingDelete) {
+            val hidden = vm.pendingDelete?.takeIf { !it.isTask }?.ids ?: emptySet()
+            OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1)
+                .filter { it.id !in hidden }
+                .map { it.id }
+        }
+        OrgSelectionBar(
+            count = vm.orgSelection.size,
+            allChosen = shown.isNotEmpty() && vm.orgSelection.containsAll(shown),
+            onSelectAll = { vm.orgSelectAll(shown) },
+            onClose = vm::orgStopSelecting,
+        ) {
+            OrgSelectionVerb("复制") {
+                // The reference app's 复制: the picked notes, one per line, in the
+                // order the page draws them.
+                val text = OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1)
+                    .filter { it.id in vm.orgSelection }
+                    .joinToString("\n\n") { it.content }
+                clipboard.setText(AnnotatedString(text))
+            }
+            OrgSelectionVerb("删除", danger = true) { vm.orgDeleteSelected(isTask = false) }
+        }
+        return
+    }
     OrgBar(
         title = "收件箱",
         canUndo = vm.view?.orgCanUndo == true,
@@ -180,6 +212,35 @@ fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
 fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
     var sortOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    val catalog = vm.view?.org ?: OrgCatalog.Empty
+    if (vm.orgSelecting) {
+        val dates = remember(catalog) { OrgModel.Dates.now() }
+        val shown = remember(
+            catalog, vm.orgView, vm.orgList, vm.orgQuery, vm.orgTaskSort, vm.orgShowDone, vm.pendingDelete, dates,
+        ) {
+            val hidden = vm.pendingDelete?.takeIf { it.isTask }?.ids ?: emptySet()
+            OrgModel.tasks(
+                catalog = catalog,
+                view = vm.orgView,
+                list = vm.orgList,
+                query = vm.orgQuery,
+                sort = vm.orgTaskSort,
+                selected = -1,
+                showDone = vm.orgShowDone,
+                dates = dates,
+            ).filter { it.id !in hidden }.map { it.id }
+        }
+        OrgSelectionBar(
+            count = vm.orgSelection.size,
+            allChosen = shown.isNotEmpty() && vm.orgSelection.containsAll(shown),
+            onSelectAll = { vm.orgSelectAll(shown) },
+            onClose = vm::orgStopSelecting,
+        ) {
+            OrgSelectionVerb("完成") { vm.orgCompleteSelected(true) }
+            OrgSelectionVerb("删除", danger = true) { vm.orgDeleteSelected(isTask = true) }
+        }
+        return
+    }
     OrgBar(
         title = "任务",
         canUndo = vm.view?.orgCanUndo == true,
@@ -263,6 +324,61 @@ private fun OrgBar(
     )
 }
 
+/**
+ * The bar 多选 puts in place of the toolbar: how many are picked, 全选, the verb
+ * for what is picked, and ✕ to leave the mode.
+ *
+ * The reference app's own shape — a selection is a *mode*, and the bar becomes the
+ * selection's rather than the toolbar growing a checkbox. The verb is a word
+ * rather than a glyph because 复制 and 完成 have no icon in the shell's own set, and
+ * a guessed glyph is worse than a word.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OrgSelectionBar(
+    count: Int,
+    allChosen: Boolean,
+    onSelectAll: () -> Unit,
+    onClose: () -> Unit,
+    verbs: @Composable RowScope.() -> Unit,
+) {
+    val colors = LocalQuireColors.current
+    TopAppBar(
+        title = {
+            Text(
+                text = "已选 $count 项",
+                style = QuireType.ui.copy(fontWeight = FontWeight.SemiBold),
+                color = colors.textPrimary,
+                maxLines = 1,
+            )
+        },
+        navigationIcon = {
+            IconButton(onClick = onClose) {
+                Icon(Icons.Default.Close, contentDescription = "退出多选", tint = colors.textSecondary)
+            }
+        },
+        actions = {
+            TextButton(onClick = onSelectAll) {
+                Text(if (allChosen) "取消全选" else "全选", color = colors.accentText)
+            }
+            verbs()
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = colors.background,
+            titleContentColor = colors.textPrimary,
+        ),
+    )
+}
+
+/** One verb of a selection bar: a word, because the shell has no glyph for it. */
+@Composable
+private fun OrgSelectionVerb(label: String, danger: Boolean = false, onClick: () -> Unit) {
+    val colors = LocalQuireColors.current
+    TextButton(onClick = onClick) {
+        Text(label, color = if (danger) colors.danger else colors.accentText)
+    }
+}
+
 // ─── 收件箱 ─────────────────────────────────────────────────────────────────
 
 @Composable
@@ -312,6 +428,7 @@ fun NotesPage(vm: QuireViewModel) {
                 )
             }
             NoteTagChips(catalog = catalog, selected = vm.orgTag, onPick = vm::orgPickTag)
+            TagFilterBar(path = vm.orgTag, onUp = vm::orgTagUp, onClear = { vm.orgPickTag("") })
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -331,6 +448,10 @@ fun NotesPage(vm: QuireViewModel) {
                             vm.orgSelectNote(parent)
                         },
                         onMenu = { vm.orgOpenNoteMenu(row.id) },
+                        selecting = vm.orgSelecting,
+                        selected = row.id in vm.orgSelection,
+                        onSelect = { vm.orgToggleSelected(row.id) },
+                        onLongSelect = { vm.orgStartSelecting(row.id) },
                     )
                 }
                 if (rows.isEmpty()) {
@@ -366,10 +487,17 @@ fun NotesPage(vm: QuireViewModel) {
     }
 }
 
-/** 全部笔记, then the tags the notes carry. */
+/**
+ * The tag row: the level the filter is on, one chip per child tag.
+ *
+ * At the top level the chips are the tags themselves and 全部笔记 is the "no
+ * filter" chip. One level down they are the *next segment* of everything under the
+ * path, so `项目` → `工作` → `ActivityWatch` is three taps — the reference app's own
+ * 层级标签 walk. A chip's number is how many notes tapping it would leave on screen.
+ */
 @Composable
 private fun NoteTagChips(catalog: OrgCatalog, selected: String, onPick: (String) -> Unit) {
-    val chips = remember(catalog) { OrgModel.tagChips(catalog) }
+    val chips = remember(catalog, selected) { OrgModel.tagChips(catalog, selected) }
     if (chips.isEmpty()) return
     LazyRow(
         modifier = Modifier.fillMaxWidth().height(38.dp),
@@ -377,14 +505,62 @@ private fun NoteTagChips(catalog: OrgCatalog, selected: String, onPick: (String)
         horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        item(key = "all-notes") {
-            OrgChip(label = "全部笔记", selected = selected.isEmpty(), onClick = { onPick("") })
+        if (selected.isEmpty()) {
+            item(key = "all-notes") {
+                OrgChip(label = "全部笔记", selected = true, onClick = { onPick("") })
+            }
         }
+        // The child's own segment rather than the whole path: the path is the filter
+        // bar's line, and a chip that repeated it would be the same words twice.
         items(chips, key = { "tag-${it.name}" }) { chip ->
             OrgChip(
-                label = "#${chip.name} ${chip.count}",
-                selected = selected == chip.name,
+                label = "#${OrgModel.tagSegments(chip.name).last()} ${chip.count}",
                 onClick = { onPick(chip.name) },
+            )
+        }
+    }
+}
+
+/**
+ * The tag filter bar: where the filter is, one level up, and out.
+ *
+ * The reference app's own bar. ↑ is drawn only when there is a level above — a
+ * button whose only answer is "you are already there" is a button that does
+ * nothing — and ✕ is the way back to 全部笔记 without walking up a level at a time.
+ */
+@Composable
+private fun TagFilterBar(path: String, onUp: () -> Unit, onClear: () -> Unit) {
+    if (path.isEmpty()) return
+    val colors = LocalQuireColors.current
+    val parent = OrgModel.tagParentPath(path)
+    Row(
+        modifier = Modifier.fillMaxWidth().height(36.dp).padding(end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onUp, enabled = parent != null, modifier = Modifier.size(36.dp)) {
+            if (parent != null) {
+                Icon(
+                    Icons.Default.KeyboardArrowUp,
+                    contentDescription = "返回上级标签",
+                    tint = colors.accentText,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        Text(
+            text = OrgModel.tagBreadcrumb(path),
+            style = QuireType.caption.copy(fontSize = 13.sp),
+            color = colors.accentText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "清除筛选",
+                tint = colors.textSecondary,
+                modifier = Modifier.size(18.dp),
             )
         }
     }
@@ -458,6 +634,12 @@ fun TasksPage(vm: QuireViewModel) {
                             onToggle = { vm.orgToggleTaskDone(row.id, !row.done) },
                             onClick = { vm.orgSelectTask(row.id) },
                             onMenu = { vm.orgOpenTaskMenu(row.id) },
+                            selecting = vm.orgSelecting,
+                            selected = row.id in vm.orgSelection,
+                            onSelect = { vm.orgToggleSelected(row.id) },
+                            // The board is a "what is left" view and has no room for a
+                            // selection bar; 多选 is the list's.
+                            onLongSelect = if (board) null else { { vm.orgStartSelecting(row.id) } },
                         )
                     }
                     if (rows.isEmpty()) {
@@ -1148,6 +1330,10 @@ private fun OrgNotesMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit) {
         contentColor = colors.textPrimary,
     ) {
         Column(modifier = Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
+            OrgSheetItem("多选") {
+                onDismiss()
+                vm.orgBeginSelecting()
+            }
             OrgSheetItem("清除过滤") {
                 vm.orgPickTag("")
                 vm.orgSetQuery("")
@@ -1202,6 +1388,10 @@ private fun OrgTasksMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit) {
                 onDismiss()
             }
             HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
+            OrgSheetItem("多选") {
+                onDismiss()
+                vm.orgBeginSelecting()
+            }
             OrgSheetItem("新建清单") { creating = true }
         }
     }
@@ -1241,6 +1431,12 @@ private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: Q
             OrgSheetItem("复制内容") {
                 clipboard.setText(AnnotatedString(row.content))
                 onDismiss()
+            }
+            // The reference app's own migration, and its no-confirm rule: the note
+            // becomes a task and the note goes, with the 撤销 bar as the way back.
+            OrgSheetItem("转为待办") {
+                onDismiss()
+                vm.orgConvertToTask(row.id)
             }
             HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
             OrgSheetItem("删除", danger = true) {
@@ -1506,7 +1702,7 @@ private fun OrgChip(
 
 /** The checkbox in front of a task and a checklist line. */
 @Composable
-private fun OrgCheck(checked: Boolean, round: Boolean = false, size: Dp = 18.dp, onToggle: () -> Unit) {
+internal fun OrgCheck(checked: Boolean, round: Boolean = false, size: Dp = 18.dp, onToggle: () -> Unit) {
     val colors = LocalQuireColors.current
     val shape = RoundedCornerShape(if (round) size / 2 else Radius.sm)
     Box(
@@ -1572,6 +1768,7 @@ private fun OrgDue(label: String, overdue: Boolean, today: Boolean) {
  * the list's dot, the priority, the deadline, the checklist count, and the tags
  * pushed to the right edge.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TaskRowView(
     row: OrgModel.TaskRow,
@@ -1579,20 +1776,42 @@ private fun TaskRowView(
     onToggle: () -> Unit,
     onClick: () -> Unit,
     onMenu: () -> Unit,
+    /** 多选: the page is picking rows, so a tap toggles rather than opens. */
+    selecting: Boolean = false,
+    selected: Boolean = false,
+    onSelect: (() -> Unit)? = null,
+    /** A long press *starts* 多选 — a finger cannot hover, so this is the way in. */
+    onLongSelect: (() -> Unit)? = null,
 ) {
     val colors = LocalQuireColors.current
+    val gesture = when {
+        selecting && onSelect != null -> Modifier.combinedClickable(onClick = onSelect)
+        !selecting && onLongSelect != null ->
+            Modifier.combinedClickable(onClick = onClick, onLongClick = onLongSelect)
+        else -> Modifier.clickable(onClick = onClick)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 4.dp, vertical = 3.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (row.selected) colors.surfaceSelected else colors.card)
-            .border(1.dp, if (row.selected) colors.accent else colors.cardBorder, RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
+            .background(if (selected || row.selected) colors.surfaceSelected else colors.card)
+            .border(
+                1.dp,
+                if (selected || row.selected) colors.accent else colors.cardBorder,
+                RoundedCornerShape(12.dp),
+            )
+            .then(gesture)
             .padding(start = Spacing.sm, end = 10.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        OrgCheck(checked = row.done, round = true, size = 20.dp, onToggle = onToggle)
+        // In 多选 the box in front is the *selection*, not the task's own state: a
+        // tap that both picked a row and ticked it would be two verbs in one tap.
+        if (selecting) {
+            OrgCheck(checked = selected, size = 20.dp, onToggle = { onSelect?.invoke() })
+        } else {
+            OrgCheck(checked = row.done, round = true, size = 20.dp, onToggle = onToggle)
+        }
         Column(
             modifier = Modifier.weight(1f).padding(start = Spacing.xs),
             verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -1646,13 +1865,15 @@ private fun TaskRowView(
                 }
             }
         }
-        IconButton(onClick = onMenu, modifier = Modifier.size(32.dp)) {
-            Icon(
-                Icons.Default.MoreVert,
-                contentDescription = "更多",
-                tint = colors.textMuted,
-                modifier = Modifier.size(20.dp),
-            )
+        if (!selecting) {
+            IconButton(onClick = onMenu, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "更多",
+                    tint = colors.textMuted,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }

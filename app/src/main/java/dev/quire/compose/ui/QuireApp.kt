@@ -138,13 +138,18 @@ private fun Shell(view: View, vm: QuireViewModel) {
     LaunchedEffect(Unit) { vm.openNotes() }
 
     // The back gesture, in the order a touch user expects: close the capture
-    // overlay, leave the open row's form, then leave the destination — and both
-    // 任务 and the document go **home** to 收件箱 rather than out of the app. Only
-    // 收件箱 itself hands the gesture to the system, which is what makes it the
-    // bottom of the stack.
-    BackHandler(enabled = area != Area.Notes || vm.orgCompose != QuireViewModel.Compose.Closed) {
+    // overlay, leave 多选, leave the open row's form, then leave the destination —
+    // and both 任务 and the document go **home** to 收件箱 rather than out of the
+    // app. Only 收件箱 itself hands the gesture to the system, which is what makes
+    // it the bottom of the stack.
+    BackHandler(
+        enabled = area != Area.Notes ||
+            vm.orgCompose != QuireViewModel.Compose.Closed ||
+            vm.orgSelecting,
+    ) {
         when {
             vm.orgCompose != QuireViewModel.Compose.Closed -> vm.orgCloseComposer()
+            vm.orgSelecting -> vm.orgStopSelecting()
             area == Area.Tasks && organizerInDetail(vm) -> vm.orgSelectRow(-1)
             area == Area.Tasks -> area = Area.Notes
             area == Area.Pages -> area = Area.Notes

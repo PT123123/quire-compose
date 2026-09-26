@@ -373,6 +373,75 @@ class OrgModelTest {
         )
     }
 
+    // ─── a tag is a path ────────────────────────────────────────────────────
+
+    @Test
+    fun a_tag_filter_keeps_a_whole_subtree_and_stops_at_a_segment() {
+        val catalog = OrgCatalog(
+            listOf(
+                note(1, tags = listOf("项目/工作")),
+                note(2, tags = listOf("项目/生活")),
+                note(3, tags = listOf("项目")),
+                note(4, tags = listOf("项目2")),
+                note(5, tags = listOf("别的")),
+            ),
+            emptyList(),
+            emptyList(),
+        )
+        // `项目` is a subtree: the tag itself and everything under it. `项目2` is a
+        // different tag that only *looks* nested, and a plain prefix test keeps it.
+        assertEquals(listOf(1L, 2L, 3L), OrgModel.notes(catalog, "", "项目", 0, -1).map { it.id }.sorted())
+        assertEquals(listOf(1L), OrgModel.notes(catalog, "", "项目/工作", 0, -1).map { it.id })
+        assertEquals(listOf(4L), OrgModel.notes(catalog, "", "项目2", 0, -1).map { it.id })
+        assertEquals(5, OrgModel.notes(catalog, "", "", 0, -1).size)
+    }
+
+    @Test
+    fun the_tag_row_shows_one_level_and_counts_a_note_once_per_prefix() {
+        val catalog = OrgCatalog(
+            listOf(
+                // Two tags under `项目` — still one note under `项目`.
+                note(1, tags = listOf("项目/工作", "项目/生活")),
+                note(2, tags = listOf("项目/工作")),
+                note(3, tags = listOf("idea")),
+            ),
+            emptyList(),
+            emptyList(),
+        )
+        assertEquals(
+            listOf("项目" to 2, "idea" to 1),
+            OrgModel.tagChips(catalog).map { it.name to it.count },
+        )
+        // One level down the chips are the *next* segment, still carrying the path,
+        // and the count is again what the tap would leave on screen.
+        assertEquals(
+            listOf("项目/工作" to 2, "项目/生活" to 1),
+            OrgModel.tagChips(catalog, "项目").map { it.name to it.count },
+        )
+    }
+
+    @Test
+    fun a_hierarchical_tag_reads_as_a_breadcrumb_and_walks_up_one_level() {
+        assertEquals(listOf("项目", "工作"), OrgModel.tagSegments("项目 / 工作"))
+        assertEquals("项目/工作", OrgModel.tagParentPath("项目/工作/xx"))
+        assertNull(OrgModel.tagParentPath("项目"))
+        assertEquals("项目 / 工作", OrgModel.tagBreadcrumb("项目/工作"))
+        assertEquals("#项目 / 工作", OrgModel.tagLabel("项目/工作"))
+    }
+
+    @Test
+    fun a_note_turned_into_a_task_gives_its_first_line_a_title() {
+        // The note's own title wins when it has one — a desktop-made note.
+        assertEquals("会议", OrgModel.taskTitle(note(1, title = "会议", body = "# 别的")))
+        // Otherwise the first non-empty line, with the markdown that opens it taken
+        // off: a title of "##" is not a title.
+        assertEquals("买了牛奶", OrgModel.taskTitle(note(2, title = "", body = "\n  买了牛奶\n还有鸡蛋")))
+        assertEquals("会议纪要", OrgModel.taskTitle(note(3, title = "", body = "# 会议纪要\n细节")))
+        assertEquals("第一件事", OrgModel.taskTitle(note(4, title = "", body = "- 第一件事")))
+        assertEquals("第二步", OrgModel.taskTitle(note(5, title = "", body = "2. 第二步")))
+        assertEquals("", OrgModel.taskTitle(note(6, title = "", body = "   \n  ")))
+    }
+
     // ─── the deadlines ──────────────────────────────────────────────────────
 
     @Test

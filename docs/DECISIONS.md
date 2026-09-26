@@ -4,6 +4,59 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0018 · 层级标签, 转为待办 and 多选 — the three the reference app had and this shell did not
+
+Decision: three things the reference app (`aw-android-native`) does, done here.
+
+**A tag is a path.** `OrgModel` gains the reference app's own vocabulary —
+`tagSegments` / `tagParentPath` / `tagBreadcrumb` / `tagLabel` — the tag filter
+becomes a **segment-boundary prefix** match (so `项目` keeps `项目` and `项目/工作`
+and drops `项目2`, which a plain `startsWith` would keep), and the chips row shows
+**one level at a time**: the direct children of the path being filtered, each with
+the number of notes at or under it. A filter bar carries the breadcrumb,
+**↑ 返回上级** and **✕ 清除**, which is how a level is left without a chip for it.
+
+**转为待办.** The note's ⋯ turns the note into a task and removes the note.
+`OrgModel.taskTitle` is the reference app's rule — the note's own title if it has
+one, else its first line with the markdown that opens it stripped, cut to 50
+characters — the body travels whole as the task's 备注, the tags come along, and it
+lands in 收集箱.
+
+**多选 is a mode.** The toolbar becomes a selection bar (已选 N 项 · 全选 · the
+verb · ✕) while it is on, a **long press** on a row starts it with that row picked,
+and the ⋯ menu's 多选 starts it empty. The picked ids live in the view model, so a
+rotation keeps them and a row a filter hides is still picked when the filter comes
+off.
+
+Why: the M2.5 alignment pass named these three as not done (`PLAN`'s M2.5 tail),
+and they are the rest of what the reference app's 收件箱 and 任务 screens offer
+that this shell's do not.
+
+Consequences:
+
+- **No core change and no rev bump.** The hierarchy is a string convention inside
+  the existing `tags` column, so the rows, the wire snapshot and the merge are
+  untouched — the two shells and the desktop still read the same library, and a
+  half-aligned build cannot corrupt a tag.
+- The tag row's number is a **subtree** count and counts a note **once per prefix**:
+  two tags under `项目` are one note under `项目`, because the chip has to say how
+  many notes tapping it would leave on screen.
+- 转为待办 adds **no bridge op**: it is `orgQuickAdd` + `orgTaskNotes`, and the
+  note's removal rides the **deferred** delete (`deferDelete`), whose bar now says
+  已转为待办 instead of 笔记已删除. So one 撤销 puts the whole conversion back, and
+  nothing at all is written before the three-second window closes. The two writes
+  are two steps on the organizer's stack, which is what the reference app's two
+  sequential requests also leave behind.
+- 全选 covers **what the page is showing** — the filter is what the user is looking
+  at, and a 全选 that reached past it would be a lie about the rows it lit. A row
+  inside its 撤销 window is not on screen and is not in it.
+- The board is not selectable: it is a "what is left" view with no room for a
+  selection bar, so its cards keep the plain tap and 多选 is the list's.
+- **Still not here, and still named**: a persistent 回收站, 笔记历史 / 恢复版本,
+  reminders, a note body that renders its markdown, and the reference app's cloud
+  backup / WiFi transfer. Each needs something `quire-core` does not have (soft
+  delete, revisions) or a subsystem this shell has not built (notifications).
+
 ## ADR-0017 · The local delivery is a workshop deploy, and it advances the version
 
 Decision: `scripts/deploy-workshop.ps1` (`just deploy-workshop`) bumps

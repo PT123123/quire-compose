@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.6.0 — 层级标签, 转为待办, 多选
+
+The rest of what the reference app's 收件箱 and 任务 offer that this shell did not
+(ADR-0018). All three are shell-side: no `quire-core` change and no rev bump, so
+the library this reads is the same one the other two shells read.
+
+### 标签 are paths
+
+- A tag may be `项目/工作/ActivityWatch`. The filter is a **segment-boundary
+  prefix** — `项目` keeps `项目` and `项目/工作` and drops `项目2`, which a plain
+  prefix test would keep.
+- The chips row shows **one level**: the direct children of the path being filtered,
+  each carrying how many notes tapping it would leave on screen. `项目` → `工作` →
+  `ActivityWatch` is three taps.
+- A filter bar under the row carries the breadcrumb, **↑ 返回上级** one level, and
+  **✕ 清除**. A tag's card and detail line read as `#项目 / 工作`.
+
+### 转为待办
+
+- A note's ⋯ turns it into a 收集箱 task and removes the note, with no confirmation
+  dialog: the title is the note's own title or its first line with the markdown
+  that opens it stripped (50 characters), the body travels whole as 备注, and the
+  tags come along.
+- The removal is the existing **deferred** delete, so the bar appears saying
+  已转为待办 and one 撤销 puts the whole conversion back. The two writes are two
+  steps on the organizer's stack, as the reference app's two requests also are.
+
+### 多选
+
+- A **long press** on a row starts 多选 with that row picked — a finger cannot
+  hover, and a gesture nobody can discover must not be the only way — and the ⋯
+  menu's 多选 starts it empty.
+- The toolbar becomes the selection's own bar: 已选 N 项 · **全选** · the verb · ✕.
+  收件箱's verb is 删除 (with 复制 above it in the bar); 任务's is 完成 and 删除.
+- 全选 covers what the page is *showing*: the filter decides, and a row inside its
+  撤销 window is not on screen and is not in it.
+- The picked ids live in the view model, so a rotation keeps them and a filter that
+  hides a picked row does not unpick it. The board is not selectable — it is a
+  "what is left" view with no room for a selection bar.
+
+### Also
+
+- `OrgModelTest` grew seven tests: the subtree filter and its `项目2` boundary, the
+  one-level chip row and its once-per-prefix count, the breadcrumb walk, and the
+  title 转为待办 gives a note.
+
 ## 0.5.1 — the workshop deploy, and the local copy of a release
 
 `just deploy-workshop` (ADR-0017): bump the patch, build the signed release APK,

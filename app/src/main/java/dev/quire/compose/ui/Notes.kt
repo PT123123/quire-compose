@@ -1,8 +1,10 @@
 package dev.quire.compose.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -73,6 +75,7 @@ import java.util.Locale
  * When the note is a reply, a muted `↩ <parent's first line>` row sits under the
  * text and taps through to what it answers.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun NoteCardView(
     row: OrgModel.NoteRow,
@@ -80,16 +83,32 @@ internal fun NoteCardView(
     onClick: () -> Unit,
     onParent: (Long) -> Unit,
     onMenu: () -> Unit,
+    /** 多选: the page is picking notes, so a tap toggles rather than opens. */
+    selecting: Boolean = false,
+    selected: Boolean = false,
+    onSelect: (() -> Unit)? = null,
+    /** A long press *starts* 多选 — a finger cannot hover, so this is the way in. */
+    onLongSelect: (() -> Unit)? = null,
 ) {
     val colors = LocalQuireColors.current
+    val gesture = when {
+        selecting && onSelect != null -> Modifier.combinedClickable(onClick = onSelect)
+        !selecting && onLongSelect != null ->
+            Modifier.combinedClickable(onClick = onClick, onLongClick = onLongSelect)
+        else -> Modifier.clickable(onClick = onClick)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 6.dp, vertical = 3.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (row.selected) colors.surfaceSelected else colors.card)
-            .border(1.dp, if (row.selected) colors.accent else colors.cardBorder, RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
+            .background(if (selected || row.selected) colors.surfaceSelected else colors.card)
+            .border(
+                1.dp,
+                if (selected || row.selected) colors.accent else colors.cardBorder,
+                RoundedCornerShape(12.dp),
+            )
+            .then(gesture)
             .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.Top,
     ) {
@@ -106,7 +125,7 @@ internal fun NoteCardView(
             row.ref?.let { ref -> ParentPreviewRow(ref = ref, preview = preview, onOpen = onParent) }
             if (row.tags.isNotEmpty()) {
                 Text(
-                    text = row.tags.joinToString("  ") { "#$it" },
+                    text = row.tags.joinToString("  ") { OrgModel.tagLabel(it) },
                     style = QuireType.caption.copy(fontSize = 13.sp),
                     color = colors.accentText,
                     maxLines = 1,
@@ -121,22 +140,26 @@ internal fun NoteCardView(
                 textAlign = androidx.compose.ui.text.style.TextAlign.End,
             )
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (row.pinned) {
-                Icon(
-                    Icons.Default.Star,
-                    contentDescription = "已置顶",
-                    tint = colors.accentText,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-            IconButton(onClick = onMenu, modifier = Modifier.size(34.dp)) {
-                Icon(
-                    Icons.Default.MoreVert,
-                    contentDescription = "更多",
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(20.dp),
-                )
+        if (selecting) {
+            OrgCheck(checked = selected, size = 22.dp, onToggle = { onSelect?.invoke() })
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (row.pinned) {
+                    Icon(
+                        Icons.Default.Star,
+                        contentDescription = "已置顶",
+                        tint = colors.accentText,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                IconButton(onClick = onMenu, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "更多",
+                        tint = colors.textMuted,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
         }
     }
@@ -238,7 +261,7 @@ fun NoteDetailPage(row: OrgModel.NoteRow, catalog: OrgCatalog, vm: QuireViewMode
 
         if (row.tags.isNotEmpty()) {
             Text(
-                text = row.tags.joinToString("  ") { "#$it" },
+                text = row.tags.joinToString("  ") { OrgModel.tagLabel(it) },
                 style = QuireType.caption,
                 color = colors.accentText,
                 modifier = Modifier.fillMaxWidth(),
@@ -347,7 +370,7 @@ private fun NoteDetailsSheet(row: OrgModel.NoteRow, catalog: OrgCatalog, onDismi
             DetailRow("编号", row.id.toString())
             DetailRow("创建", instant(note?.created))
             DetailRow("修改", instant(note?.edited))
-            DetailRow("标签", if (row.tags.isEmpty()) "无" else row.tags.joinToString(" ") { "#$it" })
+            DetailRow("标签", if (row.tags.isEmpty()) "无" else row.tags.joinToString(" ") { OrgModel.tagLabel(it) })
             DetailRow("长度", "${(note?.body?.ifEmpty { note.title } ?: "").length} 字")
             DetailRow("置顶", if (row.pinned) "是" else "否")
             DetailRow("引用", row.ref?.toString() ?: "无")

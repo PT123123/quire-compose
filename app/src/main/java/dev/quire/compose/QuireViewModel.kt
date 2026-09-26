@@ -288,6 +288,10 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgCompose = Compose.Closed
         orgTaskSel = -1
         orgNoteSel = -1
+        // A selection does not cross destinations: the ids a page picked mean
+        // nothing to the other one.
+        orgSelecting = false
+        orgSelection = emptySet()
     }
 
     fun orgPickView(view: Int) {
@@ -331,8 +335,77 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgTag = tag
     }
 
+    /**
+     * Step the tag filter up one level: `项目/工作` → `项目` → no filter. The
+     * reference app's ↑ on its filter bar, which is also how the top level is
+     * reached without a chip for it.
+     */
+    fun orgTagUp() {
+        orgTag = OrgModel.tagParentPath(orgTag).orEmpty()
+    }
+
     fun orgToggleShowDone() {
         orgShowDone = !orgShowDone
+    }
+
+    // ─── 多选 ────────────────────────────────────────────────────────────────
+    //
+    // A selection is a *mode*, the way the reference app models it: the toolbar
+    // becomes the selection's own bar while it is on, and leaving it drops what
+    // was picked. The ids live here rather than in the page so a rotation keeps
+    // them, and they are always ids — never rows — so a row that a filter hides
+    // is still selected when the filter comes off.
+
+    /** Whether the page is picking rows rather than showing them. */
+    var orgSelecting by mutableStateOf(false)
+        private set
+
+    /** The ids picked, in the page that is selecting. */
+    var orgSelection by mutableStateOf<Set<Long>>(emptySet())
+        private set
+
+    /** A long press on a row: start selecting, with that row already picked. */
+    fun orgStartSelecting(id: Long) {
+        orgSelecting = true
+        orgSelection = setOf(id)
+    }
+
+    /** 多选 from the ⋯ menu: the mode, with nothing picked yet. */
+    fun orgBeginSelecting() {
+        orgSelecting = true
+        orgSelection = emptySet()
+    }
+
+    fun orgStopSelecting() {
+        orgSelecting = false
+        orgSelection = emptySet()
+    }
+
+    fun orgToggleSelected(id: Long) {
+        orgSelection = if (id in orgSelection) orgSelection - id else orgSelection + id
+    }
+
+    /** 全选 over what the page is showing — the filter decides, as it does for 复制全部. */
+    fun orgSelectAll(ids: Collection<Long>) {
+        orgSelection = ids.toSet()
+    }
+
+    /**
+     * 删除 on a selection: one deferred batch, so the whole selection is one 撤销
+     * away and nothing is sent until the window closes (ADR-0015).
+     */
+    fun orgDeleteSelected(isTask: Boolean) {
+        val ids = orgSelection.toSet()
+        if (ids.isEmpty()) return
+        orgStopSelecting()
+        deferDelete(ids, isTask)
+    }
+
+    /** 完成 on a selection: each row is ticked on its own, as the reference app's PUTs are. */
+    fun orgCompleteSelected(done: Boolean) {
+        val ids = orgSelection.toSet()
+        orgStopSelecting()
+        for (id in ids) act { bridge.orgTaskDone(id, done) }
     }
 
     /** `-1` closes the detail — the back gesture, and the back chevron. */
@@ -500,6 +573,45 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         deferDelete(setOf(note), isTask = false)
     }
 
+    /**
+     * 转为待办: the note becomes a task and the note goes — the reference app's own
+     * migration, offered from the note's ⋯ and from its page. The title is the
+     * note's first line with its markdown stripped ([OrgModel.taskTitle]), the body
+     * travels whole as the task's 备注, and the tags come along.
+     *
+     * It lands in 收集箱, as the reference app's does when no list is in hand. The
+     * note's removal is the same **deferred** delete every other delete uses — the
+     * row vanishes at once and the bar says what happened, so 撤销 is the way back;
+     * nothing is sent until the window closes, which is what keeps a half-done
+     * conversion out of the library.
+     */
+    fun orgConvertToTask(note: Long) {
+        val row = view?.org?.notes?.firstOrNull { it.id == note } ?: return
+        orgNoteMenu = null
+        if (orgNoteSel == note) orgNoteSel = -1
+        val title = OrgModel.taskTitle(row)
+        val body = row.body
+        val known = view?.org?.tasks?.mapTo(HashSet()) { it.id } ?: emptySet()
+        viewModelScope.launch {
+            val reply = withContext(bridgeDispatcher) {
+                runCatching { bridge.orgQuickAdd(0L, title, row.tags.joinToString(", "), null) }
+            }
+            reply
+                .onSuccess { result ->
+                    apply(result)
+                    val fresh = (result as? Reply.Updated)?.view?.org?.tasks
+                        ?.firstOrNull { it.id !in known }
+                    // The body is what the note *was*: it is carried over rather than
+                    // repeated as the title.
+                    if (fresh != null && body.isNotEmpty() && body != title) {
+                        act { bridge.orgTaskNotes(fresh.id, body) }
+                    }
+                }
+                .onFailure { error = it.message ?: it.toString() }
+        }
+        deferDelete(setOf(note), isTask = false, message = "已转为待办")
+    }
+
     fun orgTaskTitle(task: Long, title: String) = act { bridge.orgTaskTitle(task, title) }
 
     fun orgTaskNotes(task: Long, notes: String) = act { bridge.orgTaskNotes(task, notes) }
@@ -605,15 +717,21 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     private var deleteToken = 0L
 
-    /** Hide the rows and start the window. A second delete commits the first. */
-    private fun deferDelete(ids: Set<Long>, isTask: Boolean) {
+    /**
+     * Hide the rows and start the window. A second delete commits the first.
+     *
+     * `message` is what the bar says; 转为待办 passes its own, so the bar that
+     * appears when a note becomes a task reads as what happened rather than as a
+     * deletion.
+     */
+    private fun deferDelete(ids: Set<Long>, isTask: Boolean, message: String? = null) {
         pendingDelete?.let { commitPendingDelete(it.token) }
         val token = ++deleteToken
         pendingDelete = PendingDelete(
             token = token,
             ids = ids,
             isTask = isTask,
-            message = if (isTask) "任务已删除" else "笔记已删除",
+            message = message ?: if (isTask) "任务已删除" else "笔记已删除",
         )
         viewModelScope.launch {
             delay(DELETE_UNDO_MS)

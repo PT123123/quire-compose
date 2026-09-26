@@ -91,7 +91,27 @@ pins the rev that carries it (ADR-0015, core ADR-0001).
 - [x] `quire-core`: `Note.ref_note`, migration 27, the store's read/write, the wire
       row, and a `note_map` in the merge's renumber pass — with two merge tests and
       a migration test
-- [x] Not done, and named: a persistent 回收站, 转为待办, multi-select, note history
+- [x] Not done, and named: a persistent 回收站, 笔记历史 / 恢复版本, and a note body
+      that renders its markdown. (转为待办 and 多选 were on this list and are now in
+      M2.9.)
+
+## M2.9 · 层级标签, 转为待办, 多选 — ✅
+
+The rest of the reference app's 收件箱 and 任务 screens, all of it shell-side: no
+`quire-core` change and no rev bump (ADR-0018).
+
+- [x] A tag is a **path**: the filter is a segment-boundary prefix (`项目` keeps
+      `项目/工作`, drops `项目2`), the chips row shows one level with subtree counts
+      counted once per note per prefix, and a filter bar carries the breadcrumb,
+      ↑ 返回上级 and ✕ 清除
+- [x] 转为待办: a note's ⋯ turns it into a 收集箱 task (title rule, body → 备注, tags
+      carried) and removes the note through the **deferred** delete, whose bar says
+      已转为待办 — one 撤销 puts the whole conversion back
+- [x] 多选: a mode keyed by ids in the view model, entered by a long press or the ⋯
+      menu, with 全选 over what the filter shows; 收件箱's verbs are 复制 / 删除 and
+      任务's are 完成 / 删除, and back leaves the mode before it leaves the page
+- [x] `OrgModelTest` +7: the subtree boundary, the one-level row and its count, the
+      breadcrumb walk, and the title 转为待办 gives a note
 
 ## M2.75 · 同步 — ✅ (the read-only share still open)
 
