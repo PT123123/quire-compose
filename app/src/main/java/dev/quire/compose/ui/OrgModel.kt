@@ -184,6 +184,7 @@ object OrgModel {
         tag: String,
         sort: Int,
         selected: Long,
+        exclude: Set<String> = emptySet(),
     ): List<NoteRow> {
         val needle = query.trim().lowercase()
         val rows = catalog.notes
@@ -192,6 +193,10 @@ object OrgModel {
             // a note that carries no tags at all is false, so a tagless note would be
             // filtered out of 全部笔记 by a filter that is not there.
             .filter { note -> tag.isEmpty() || note.tags.any { tagMatches(it, tag) } }
+            // 反向筛选: a note carrying a tag at or under a hidden path is not drawn.
+            // The same rule with the answer turned around, so hiding `项目` hides its
+            // subtree and leaves `项目2` alone — the desktop's `tag_excluded`.
+            .filter { note -> !tagExcluded(note.tags, exclude) }
         return sortNotes(rows, sort)
             .map { noteRow(it, it.id == selected) }
     }
@@ -340,6 +345,29 @@ object OrgModel {
         path.isEmpty() || candidate == path || candidate.startsWith("$path/")
 
     /**
+     * Whether a row carrying `tags` sits at or under any hidden path — `tagMatches`
+     * with the answer turned around, so hiding `项目` hides `项目` and `项目/工作`
+     * and leaves `项目2` alone. An empty set hides nothing.
+     */
+    fun tagExcluded(tags: List<String>, exclude: Set<String>): Boolean =
+        exclude.any { path -> tags.any { tagMatches(it, path) } }
+
+    /**
+     * A row's 唯一 ID as the clipboard spells it: the stored uuid, or `local:<id>`
+     * for a row an older peer sent without one (core ADR-0002). Never empty, so a
+     * batch instruction always has something to name — the desktop's `org_uid`.
+     */
+    fun uid(uuid: String, id: Long): String = if (uuid.isEmpty()) "local:$id" else uuid
+
+    /** The hidden set as the toolbar's own line — `排除 #项目 #工作` — or "". */
+    fun excludedLabel(exclude: Set<String>): String =
+        if (exclude.isEmpty()) {
+            ""
+        } else {
+            "排除 " + exclude.sorted().joinToString(" ") { tagLabel(it) }
+        }
+
+    /**
      * A note's title when it is turned into a task (转为待办): the note's own title if
      * it has one, else its first non-empty line with the markdown that opens it
      * stripped, cut to a length a task row can show. The reference app's own rule —
@@ -377,6 +405,8 @@ object OrgModel {
         selected: Long,
         showDone: Boolean,
         dates: Dates,
+        tag: String = "",
+        exclude: Set<String> = emptySet(),
     ): List<TaskRow> {
         val needle = query.trim().lowercase()
         // 已完成 is the one view whose answer *is* the finished ones; everywhere
@@ -385,7 +415,12 @@ object OrgModel {
         val rows = catalog.tasks.filter { task ->
             val bucket = if (list >= 0) task.list == list else inSmartView(catalog, task, view, dates)
             val finished = if (view == ORG_VIEW_DONE) task.done else !task.done || keepDone
-            bucket && finished && taskMatches(task, needle)
+            // The tag filter is the same two halves the notes' list has: 仅显示 by a
+            // path and its subtree, then 排除 by a path and its subtree. The tasks'
+            // half had no tag filter at all before ADR-0002's shell slice.
+            val shown = tag.isEmpty() || task.tags.any { tagMatches(it, tag) }
+            bucket && finished && shown && taskMatches(task, needle) &&
+                !tagExcluded(task.tags, exclude)
         }
         return sortTasks(rows, sort)
             .map { taskRow(catalog, it, dates, it.id == selected) }

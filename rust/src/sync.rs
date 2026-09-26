@@ -845,6 +845,8 @@ impl Session {
             v
         };
 
+        let mut new_uuid = || quire_core::core::organizer::new_uuid();
+
         let mut ctx = MergeCtx {
             next_page: &mut next_page,
             next_block: &mut next_block,
@@ -856,6 +858,7 @@ impl Session {
             next_note: &mut next_note,
             next_task: &mut next_task,
             next_list: &mut next_list,
+            new_uuid: &mut new_uuid,
         };
         let outcome = merge(&local, shadow.as_ref(), remote, &peer_name, &mut ctx);
         let merged = outcome.merged;
@@ -1055,6 +1058,7 @@ mod tests {
         }
         remote.notes.push(SNote {
             id: 99,
+            uuid: String::new(),
             title: String::new(),
             body: "对端加的评论".into(),
             pinned: false,

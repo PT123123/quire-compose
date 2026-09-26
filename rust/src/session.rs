@@ -273,6 +273,15 @@ pub enum Request {
     OrgDeleteList {
         list: i64,
     },
+    /// 指令 (SPEC §四十一): one batch of AI instructions, applied **in order** on
+    /// the area's own stack — so one 撤销 takes the whole batch back — with the
+    /// count and the first refusal reported through the notice bar.
+    ///
+    /// `task` is which half of the area the paste names, decided by the dialog
+    /// before the JSON arrives: the two halves take different actions, and a batch
+    /// of task actions pasted on the notes half is refused action by action rather
+    /// than silently half-applied.
+    OrgCommands { task: bool, json: String },
     /// Walk the area's own stack — never the open page's.
     OrgUndo,
     OrgRedo,
@@ -332,6 +341,12 @@ struct Reply {
     view: Option<View>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// The line the notice bar shows, when the request has one to say — 指令's own
+    /// count of what landed and what was refused. Taken, not read: a notice is for
+    /// the reply that produced it, and a second reply repeating it is the bar
+    /// telling the user about something they already read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notice: Option<String>,
 }
 
 pub struct Session {
@@ -506,6 +521,7 @@ impl Session {
                 Outcome::Quiet => None,
             },
             error: None,
+            notice: self.notice.clone(),
         };
         serde_json::to_string(&reply).unwrap_or_else(|e| error_reply(&format!("encode failed: {e}")))
     }
@@ -690,6 +706,14 @@ impl Session {
             }
             Request::OrgDeleteList { list } => {
                 self.org_op(|org, doc, hist| org.delete_list(doc, hist, list))
+            }
+            Request::OrgCommands { task, json } => {
+                let (changes, line) = self
+                    .org
+                    .apply_commands(&mut self.doc, &mut self.hist, task, &json)?;
+                self.record(changes);
+                self.notice = Some(line);
+                Ok(Outcome::Full)
             }
             Request::OrgUndo => self.walk_org_history(true),
             Request::OrgRedo => self.walk_org_history(false),
@@ -1054,6 +1078,7 @@ pub fn error_reply(message: &str) -> String {
         ok: false,
         view: None,
         error: Some(message.to_string()),
+        notice: None,
     })
     .unwrap_or_else(|_| "{\"ok\":false,\"error\":\"bridge failure\"}".to_string())
 }

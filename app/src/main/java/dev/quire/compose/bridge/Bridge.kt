@@ -190,8 +190,16 @@ class Bridge(private val handle: Long) {
 
     /** The area's own stack — never the open page's. */
     fun orgUndo(): Reply = send("orgUndo")
-
     fun orgRedo(): Reply = send("orgRedo")
+
+    /**
+     * 指令 (SPEC §四十一): one batch of AI instructions for the notes half (`task =
+     * false`) or the tasks half. `json` is the pasted `{"operations":[…]}` payload,
+     * applied by Rust **in order** and as **one** undo step; the reply's `notice`
+     * carries the count of what landed and what was refused.
+     */
+    fun orgCommands(task: Boolean, json: String): Reply =
+        send("orgCommands", "task" to task, "json" to json)
 
     // ─── LAN sync ───────────────────────────────────────────────────────────
     //

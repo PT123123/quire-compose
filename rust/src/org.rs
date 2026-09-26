@@ -148,6 +148,91 @@ impl Organizer {
         Some(changes)
     }
 
+    /// The same funnel for a **batch** (SPEC §四十一's 指令): every command is
+    /// planned against the state before any of them, applied together, and pushed
+    /// as **one** history entry — so one 撤销 takes the whole batch back.
+    fn apply_all(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        cmds: Vec<Command>,
+    ) -> Option<Vec<Change>> {
+        let changes = command::exec_all(doc, hist, ORGANIZER_STACK, cmds)?;
+        self.absorb(&changes);
+        self.can_undo = true;
+        self.can_redo = false;
+        Some(changes)
+    }
+
+    /// Apply one batch of AI instructions (SPEC §四十一's 指令) to one half of the
+    /// area, and answer with the changes plus the line the notice bar shows.
+    ///
+    /// The payload is the reference server's (`{"operations":[…]}` with an `action`
+    /// per operation) — kept verbatim so one prompt works against either end — and
+    /// the *semantics* are the desktop shell's, because the two shells must mean the
+    /// same thing by the same JSON (`app::state::org_apply_commands` is the other
+    /// implementation of this function). Three rules, all load-bearing:
+    ///
+    /// * an action this half cannot take is refused **by name** and counted, never
+    ///   silently skipped;
+    /// * `add_tags` / `remove_tags` are increments, so the AI never has to be told
+    ///   what a row already carries;
+    /// * the operations **see each other** — a batch is applied in order, so
+    ///   `add_tags` followed by `update` keeps the tag.
+    pub fn apply_commands(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        is_task: bool,
+        json: &str,
+    ) -> Result<(Vec<Change>, String), String> {
+        let payload: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| format!("JSON 解析失败：{e}"))?;
+        let ops = payload
+            .get("operations")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "缺少 operations 数组".to_string())?;
+        if ops.is_empty() {
+            return Err("operations 是空的".to_string());
+        }
+        let now = now_secs();
+        // The simulation: a copy of the catalog the batch mutates as it reads. Each
+        // command's `before` is the row the previous operation left, so the batch's
+        // own reverts walk back through every step and one 撤销 restores the
+        // original.
+        let mut sim = self.catalog.clone();
+        let mut next_note = self.next_note;
+        let mut next_task = self.next_task;
+        let mut commands: Vec<Command> = Vec::new();
+        let mut refused: Vec<String> = Vec::new();
+        for op in ops {
+            match command_of(&mut sim, is_task, op, now, &mut next_note, &mut next_task) {
+                Ok(cmd) => commands.push(cmd),
+                Err(e) => refused.push(e),
+            }
+        }
+        let (applied, changes) = if commands.is_empty() {
+            (0, Vec::new())
+        } else {
+            let n = commands.len();
+            match self.apply_all(doc, hist, commands) {
+                Some(changes) => {
+                    // Only a batch that landed may spend ids.
+                    self.next_note = next_note;
+                    self.next_task = next_task;
+                    (n, changes)
+                }
+                None => (0, Vec::new()),
+            }
+        };
+        let failed = refused.len();
+        let mut line = format!("指令完成：成功 {applied} / 失败 {failed}");
+        if let Some(first) = refused.first() {
+            line.push_str(&format!("（{first}）"));
+        }
+        Ok((changes, line))
+    }
+
     pub fn undo(&mut self, doc: &mut Document, hist: &mut History) -> Option<Vec<Change>> {
         let changes = command::undo(doc, hist, ORGANIZER_STACK)?;
         self.absorb(&changes);
@@ -265,6 +350,7 @@ impl Organizer {
         let now = now_secs();
         let note = Note {
             id: NoteId(id),
+            uuid: quire_core::core::organizer::new_uuid(),
             title: String::new(),
             body,
             pinned: false,
@@ -419,6 +505,7 @@ impl Organizer {
             .ok_or("清单里的顺序键用完了")?;
         let task = Task {
             id: TaskId(id),
+            uuid: quire_core::core::organizer::new_uuid(),
             list,
             title,
             notes: String::new(),
@@ -831,6 +918,434 @@ pub fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// One instruction as the command it means, or the reason it cannot be one.
+fn command_of(
+    sim: &mut OrganizerCatalog,
+    is_task: bool,
+    op: &serde_json::Value,
+    now: i64,
+    next_note: &mut u64,
+    next_task: &mut u64,
+) -> Result<Command, String> {
+    let action = op
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "缺少 action 字段".to_string())?;
+    if is_task {
+        task_command_of(sim, action, op, now, next_task)
+    } else {
+        note_command_of(sim, action, op, now, next_note)
+    }
+}
+
+fn note_command_of(
+    sim: &mut OrganizerCatalog,
+    action: &str,
+    op: &serde_json::Value,
+    now: i64,
+    next: &mut u64,
+) -> Result<Command, String> {
+    if action == "create" {
+        let note = Note {
+            id: NoteId(*next),
+            uuid: quire_core::core::organizer::new_uuid(),
+            title: op_string(op, "title").unwrap_or_default(),
+            body: op_string(op, "content").unwrap_or_default(),
+            pinned: op_bool(op, "pinned").unwrap_or(false),
+            tags: op_tags(op),
+            created: now,
+            edited: now,
+            ref_note: None,
+        };
+        *next += 1;
+        sim.notes.push(note.clone());
+        return Ok(Command::CreateNote { note });
+    }
+    let id = resolve_note(sim, op)?;
+    let before = sim
+        .note(id)
+        .cloned()
+        .ok_or_else(|| "笔记不存在".to_string())?;
+    let mut after = before.clone();
+    after.edited = now;
+    let cmd = match action {
+        "update" => {
+            if let Some(v) = op_string(op, "title") {
+                after.title = v;
+            }
+            if let Some(v) = op_string(op, "content") {
+                after.body = v;
+            }
+            if let Some(v) = op_bool(op, "pinned") {
+                after.pinned = v;
+            }
+            if op.get("tags").is_some() {
+                after.tags = op_tags(op);
+            }
+            Command::UpdateNote { id, before, after: after.clone() }
+        }
+        "add_tags" => {
+            after.tags = merge_tags(&before.tags, &op_tags(op));
+            Command::UpdateNote { id, before, after: after.clone() }
+        }
+        "remove_tags" => {
+            after.tags = subtract_tags(&before.tags, &op_tags(op));
+            Command::UpdateNote { id, before, after: after.clone() }
+        }
+        "set_tags" => {
+            after.tags = op_tags(op);
+            Command::UpdateNote { id, before, after: after.clone() }
+        }
+        // A comment is a note that references this one (core ADR-0001).
+        "comment" => {
+            let comment = Note {
+                id: NoteId(*next),
+                uuid: quire_core::core::organizer::new_uuid(),
+                title: String::new(),
+                body: op_string(op, "content").unwrap_or_default(),
+                pinned: false,
+                tags: op_tags(op),
+                created: now,
+                edited: now,
+                ref_note: Some(id),
+            };
+            *next += 1;
+            sim.notes.push(comment.clone());
+            return Ok(Command::CreateNote { note: comment });
+        }
+        "delete" => {
+            sim.notes.retain(|n| n.id != id);
+            return Ok(Command::DeleteNote { note: before });
+        }
+        other => return Err(format!("笔记不支持动作 {other}")),
+    };
+    if let Some(slot) = sim.notes.iter_mut().find(|n| n.id == id) {
+        *slot = after;
+    }
+    Ok(cmd)
+}
+
+fn task_command_of(
+    sim: &mut OrganizerCatalog,
+    action: &str,
+    op: &serde_json::Value,
+    now: i64,
+    next: &mut u64,
+) -> Result<Command, String> {
+    if action == "create" {
+        let title = op_string(op, "title").ok_or_else(|| "创建任务需要 title".to_string())?;
+        let list = if op.get("list_id").is_some() || op.get("list_name").is_some() {
+            resolve_list(sim, op)?
+        } else {
+            ListId::INBOX
+        };
+        let last = sim.tasks_in(list).map(|t| t.ord).max();
+        let ord =
+            OrderKey::between(last, None).ok_or_else(|| "清单里的顺序键用完了".to_string())?;
+        let done = op_bool(op, "completed").unwrap_or(false);
+        let task = Task {
+            id: TaskId(*next),
+            uuid: quire_core::core::organizer::new_uuid(),
+            list,
+            title,
+            notes: op_string(op, "content").unwrap_or_default(),
+            priority: op_priority(op).unwrap_or(Priority::None),
+            due: op_due(op),
+            repeat: Repeat::None,
+            done,
+            completed_at: done.then_some(now),
+            tags: op_tags(op),
+            subtasks: Vec::new(),
+            created: now,
+            edited: now,
+            ord,
+        };
+        *next += 1;
+        sim.tasks.push(task.clone());
+        return Ok(Command::CreateTask { task });
+    }
+    let id = resolve_task(sim, op)?;
+    let before = sim
+        .task(id)
+        .cloned()
+        .ok_or_else(|| "任务不存在".to_string())?;
+    if action == "delete" {
+        sim.tasks.retain(|t| t.id != id);
+        return Ok(Command::DeleteTask { task: before });
+    }
+    let mut after = before.clone();
+    after.edited = now;
+    let cmd = match action {
+        "update" => {
+            if let Some(v) = op_string(op, "title") {
+                after.title = v;
+            }
+            if let Some(v) = op_string(op, "content") {
+                after.notes = v;
+            }
+            if let Some(v) = op_bool(op, "completed") {
+                set_task_done(&mut after, v, now);
+            }
+            if let Some(p) = op_priority(op) {
+                after.priority = p;
+            }
+            if op.get("clear_due").is_some() || op.get("due_date").is_some() {
+                after.due = op_due(op);
+            }
+            if op.get("tags").is_some() {
+                after.tags = op_tags(op);
+            }
+            if op.get("list_id").is_some() || op.get("list_name").is_some() {
+                after.list = resolve_list(sim, op)?;
+            }
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "add_tags" => {
+            after.tags = merge_tags(&before.tags, &op_tags(op));
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "remove_tags" => {
+            after.tags = subtract_tags(&before.tags, &op_tags(op));
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "set_tags" => {
+            after.tags = op_tags(op);
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "set_completed" => {
+            let done = op_bool(op, "completed")
+                .ok_or_else(|| "set_completed 需要 completed 字段".to_string())?;
+            set_task_done(&mut after, done, now);
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "move" => {
+            after.list = resolve_list(sim, op)?;
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "set_priority" => {
+            let p = op_priority(op).ok_or_else(|| {
+                "set_priority 需要 priority 字段（0 无 / 1 低 / 2 中 / 3 高）".to_string()
+            })?;
+            after.priority = p;
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "set_due" => {
+            if op_bool(op, "clear_due") == Some(true) {
+                after.due = None;
+            } else if op.get("due_date").is_some() {
+                after.due = op_due(op);
+            } else {
+                return Err("set_due 需要 due_date 或 clear_due".to_string());
+            }
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "add_subtask" => {
+            // The row's own watermark, which is the reference's "id 自动 +1": a
+            // subtask is scoped to its task, so the two never have to agree with
+            // anyone else's counter.
+            let sub_id = after.subtasks.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+            after.subtasks.push(Subtask {
+                id: sub_id,
+                title: op_string(op, "title").unwrap_or_default(),
+                done: false,
+            });
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "set_subtask" => {
+            let sub_id = op
+                .get("subtask_id")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| "set_subtask 需要 subtask_id".to_string())?;
+            let sub = after
+                .subtasks
+                .iter_mut()
+                .find(|s| s.id == sub_id)
+                .ok_or_else(|| format!("子任务不存在：{sub_id}"))?;
+            if let Some(v) = op_bool(op, "completed") {
+                sub.done = v;
+            }
+            if let Some(v) = op_string(op, "title") {
+                sub.title = v;
+            }
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "remove_subtask" => {
+            let sub_id = op
+                .get("subtask_id")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| "remove_subtask 需要 subtask_id".to_string())?;
+            after.subtasks.retain(|s| s.id != sub_id);
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        // A task's comment appends to its 备注: a task has no second row to hang a
+        // reply on, and the reference's `comment` is exactly this.
+        "comment" => {
+            let text = op_string(op, "content").unwrap_or_default();
+            after.notes = if after.notes.trim().is_empty() {
+                text
+            } else {
+                format!("{}\n\n{}", after.notes, text)
+            };
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        other => return Err(format!("任务不支持动作 {other}")),
+    };
+    if let Some(slot) = sim.tasks.iter_mut().find(|t| t.id == id) {
+        *slot = after;
+    }
+    Ok(cmd)
+}
+
+/// The note one instruction names: its `uuid` first — what the clipboard hands out,
+/// and the only name a sync cannot renumber — then `local:<id>`, then a bare `id`.
+fn resolve_note(sim: &OrganizerCatalog, op: &serde_json::Value) -> Result<NoteId, String> {
+    if let Some(name) = op
+        .get("uuid")
+        .and_then(|v| v.as_str())
+        .filter(|u| !u.is_empty())
+    {
+        if let Some(rest) = name.strip_prefix("local:") {
+            if let Ok(raw) = rest.parse::<u64>() {
+                if let Some(note) = sim.note(NoteId(raw)) {
+                    return Ok(note.id);
+                }
+            }
+        }
+        if let Some(note) = sim.notes.iter().find(|n| n.uuid == name) {
+            return Ok(note.id);
+        }
+    }
+    if let Some(raw) = op.get("id").and_then(|v| v.as_i64()) {
+        if let Some(note) = sim.note(NoteId(raw.max(0) as u64)) {
+            return Ok(note.id);
+        }
+    }
+    Err("需要提供 id 或 uuid 定位笔记".to_string())
+}
+
+/// The task one instruction names, by the same three names a note takes.
+fn resolve_task(sim: &OrganizerCatalog, op: &serde_json::Value) -> Result<TaskId, String> {
+    if let Some(name) = op
+        .get("uuid")
+        .and_then(|v| v.as_str())
+        .filter(|u| !u.is_empty())
+    {
+        if let Some(rest) = name.strip_prefix("local:") {
+            if let Ok(raw) = rest.parse::<u64>() {
+                if let Some(task) = sim.task(TaskId(raw)) {
+                    return Ok(task.id);
+                }
+            }
+        }
+        if let Some(task) = sim.tasks.iter().find(|t| t.uuid == name) {
+            return Ok(task.id);
+        }
+    }
+    if let Some(raw) = op.get("id").and_then(|v| v.as_i64()) {
+        if let Some(task) = sim.task(TaskId(raw.max(0) as u64)) {
+            return Ok(task.id);
+        }
+    }
+    Err("需要提供 id 或 uuid 定位任务".to_string())
+}
+
+/// The list an instruction files a task into: `list_id` (`0` is 收集箱, the
+/// sentinel) first, then an exact `list_name`.
+fn resolve_list(sim: &OrganizerCatalog, op: &serde_json::Value) -> Result<ListId, String> {
+    if let Some(raw) = op.get("list_id").and_then(|v| v.as_i64()) {
+        let id = raw.max(0) as u64;
+        if id == 0 {
+            return Ok(ListId::INBOX);
+        }
+        return sim
+            .list(ListId(id))
+            .map(|l| l.id)
+            .ok_or_else(|| format!("清单不存在: {id}"));
+    }
+    if let Some(name) = op.get("list_name").and_then(|v| v.as_str()) {
+        if name == "收集箱" {
+            return Ok(ListId::INBOX);
+        }
+        return sim
+            .lists
+            .iter()
+            .find(|l| l.name == name)
+            .map(|l| l.id)
+            .ok_or_else(|| format!("清单不存在: {name}"));
+    }
+    Err("move 需要 list_id 或 list_name".to_string())
+}
+
+/// One string field of an instruction, or `None` when absent or not a string.
+/// Absent and empty are deliberately different: an omitted `content` must not blank
+/// a note's body.
+fn op_string(op: &serde_json::Value, key: &str) -> Option<String> {
+    op.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+fn op_bool(op: &serde_json::Value, key: &str) -> Option<bool> {
+    op.get(key).and_then(|v| v.as_bool())
+}
+
+fn op_tags(op: &serde_json::Value) -> Vec<String> {
+    op.get("tags")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|t| t.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The picker's own slot (0 无 / 1 低 / 2 中 / 3 高), which is the numbering the
+/// reference sends. Out of range folds to 无 rather than refusing the operation.
+fn op_priority(op: &serde_json::Value) -> Option<Priority> {
+    op.get("priority")
+        .and_then(|v| v.as_i64())
+        .map(|p| Priority::from_slot(p as i32))
+}
+
+/// A deadline as `YYYY-MM-DD`, which is what a task stores. The reference's
+/// templates send an RFC 3339 instant, so the date is taken off the front.
+fn op_due(op: &serde_json::Value) -> Option<String> {
+    let raw = op.get("due_date").and_then(|v| v.as_str())?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(raw.chars().take(10).collect())
+}
+
+/// `add_tags`: the union, the row's own order first, so adding a tag never reorders
+/// the ones already there and adding one twice is adding it once.
+fn merge_tags(existing: &[String], incoming: &[String]) -> Vec<String> {
+    let mut out = existing.to_vec();
+    for tag in incoming {
+        if !out.iter().any(|t| t == tag) {
+            out.push(tag.clone());
+        }
+    }
+    out
+}
+
+/// `remove_tags`: the difference, by whole tag — `项目` does not remove `项目/工作`,
+/// because the increment names tags and not subtrees.
+fn subtract_tags(existing: &[String], incoming: &[String]) -> Vec<String> {
+    existing
+        .iter()
+        .filter(|tag| !incoming.iter().any(|x| &x == tag))
+        .cloned()
+        .collect()
+}
+
+/// Tick or untick a task; `completed_at` is cleared on untick so the two fields
+/// cannot disagree about the same fact.
+fn set_task_done(task: &mut Task, done: bool, now: i64) {
+    task.done = done;
+    task.completed_at = done.then_some(now);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,6 +1362,72 @@ mod tests {
         assert_eq!(parse_tags("a, a, b"), vec!["a", "b"]);
         // A space is NOT a separator: a tag is allowed to have one.
         assert_eq!(parse_tags("project atlas"), vec!["project atlas"]);
+    }
+
+    /// 指令 (SPEC §四十一): the operations of one batch **see each other** — each
+    /// command's `before` is what the previous one left, so the batch composes and
+    /// its own reverts walk back — and an action this half cannot take is refused
+    /// by name rather than silently skipped.
+    #[test]
+    fn a_batch_sees_its_own_operations_and_refuses_what_the_half_cannot_take() {
+        let uuid = "a".repeat(32);
+        let mut catalog = OrganizerCatalog::default();
+        catalog.notes.push(Note {
+            id: NoteId(1),
+            uuid: uuid.clone(),
+            title: String::new(),
+            body: "原文".into(),
+            pinned: false,
+            tags: vec!["原有".into()],
+            created: 0,
+            edited: 0,
+            ref_note: None,
+        });
+        let payload: serde_json::Value = serde_json::from_str(&format!(
+            r#"{{"operations":[
+                {{"action":"add_tags","uuid":"{uuid}","tags":["重要"]}},
+                {{"action":"update","uuid":"{uuid}","content":"改过了"}},
+                {{"action":"set_completed","uuid":"{uuid}"}},
+                {{"action":"update","uuid":"没有这条笔记","content":"x"}}
+            ]}}"#
+        ))
+        .unwrap();
+        let ops = payload["operations"].as_array().unwrap();
+
+        let mut next_note = 2;
+        let mut next_task = 1;
+        let mut cmds: Vec<Command> = Vec::new();
+        let mut refused: Vec<String> = Vec::new();
+        for op in ops {
+            match command_of(&mut catalog, false, op, 100, &mut next_note, &mut next_task) {
+                Ok(cmd) => cmds.push(cmd),
+                Err(e) => refused.push(e),
+            }
+        }
+        assert_eq!(
+            refused,
+            vec!["笔记不支持动作 set_completed", "需要提供 id 或 uuid 定位笔记"]
+        );
+        assert_eq!(cmds.len(), 2);
+
+        let (first_before, first_after) = match &cmds[0] {
+            Command::UpdateNote { before, after, .. } => (before, after),
+            _ => panic!("the first operation is an update"),
+        };
+        assert_eq!(first_before.tags, vec!["原有".to_string()], "before is the original");
+        assert_eq!(first_after.tags, vec!["原有".to_string(), "重要".to_string()]);
+
+        let (second_before, second_after) = match &cmds[1] {
+            Command::UpdateNote { before, after, .. } => (before, after),
+            _ => panic!("the second operation is an update"),
+        };
+        assert_eq!(second_before, first_after, "the chain: #2's before is #1's after");
+        assert_eq!(second_after.body, "改过了");
+        assert_eq!(
+            second_after.tags,
+            vec!["原有".to_string(), "重要".to_string()],
+            "the increment the first operation made survives the second"
+        );
     }
 
     #[test]
@@ -867,6 +1448,7 @@ mod tests {
         let organizer = Organizer::from_catalog(OrganizerCatalog {
             notes: vec![Note {
                 id: NoteId(7),
+                uuid: String::new(),
                 title: String::new(),
                 body: String::new(),
                 pinned: false,
@@ -883,6 +1465,7 @@ mod tests {
             }],
             tasks: vec![Task {
                 id: TaskId(20),
+                uuid: String::new(),
                 list: ListId(3),
                 title: String::new(),
                 notes: String::new(),

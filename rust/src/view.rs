@@ -138,6 +138,10 @@ pub struct OrgCatalog {
 #[serde(rename_all = "camelCase")]
 pub struct OrgNoteRow {
     pub id: u64,
+    /// SPEC §四十一's 唯一 ID (core ADR-0002): what 复制 hands an AI and what a
+    /// batch instruction names this note by. Empty for a row an older peer sent
+    /// without one — the shell falls back to `local:<id>`.
+    pub uuid: String,
     pub title: String,
     pub body: String,
     pub pinned: bool,
@@ -166,6 +170,8 @@ pub struct OrgSubtaskRow {
 #[serde(rename_all = "camelCase")]
 pub struct OrgTaskRow {
     pub id: u64,
+    /// The task's 唯一 ID; see [`OrgNoteRow::uuid`].
+    pub uuid: String,
     /// The list it belongs to. `0` is the inbox — a sentinel, not a row, and the
     /// read side folds a task whose list is gone to the inbox the same way.
     pub list: u64,
@@ -210,6 +216,7 @@ pub fn org_catalog(org: &OrganizerCatalog) -> OrgCatalog {
             .iter()
             .map(|n| OrgNoteRow {
                 id: n.id.0,
+                uuid: n.uuid.clone(),
                 title: n.title.clone(),
                 body: n.body.clone(),
                 pinned: n.pinned,
@@ -224,6 +231,7 @@ pub fn org_catalog(org: &OrganizerCatalog) -> OrgCatalog {
             .iter()
             .map(|t| OrgTaskRow {
                 id: t.id.0,
+                uuid: t.uuid.clone(),
                 list: t.list.0,
                 title: t.title.clone(),
                 notes: t.notes.clone(),

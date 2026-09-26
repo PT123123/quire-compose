@@ -99,6 +99,12 @@ data class View(
 
 data class OrgNote(
     val id: Long,
+    /**
+     * SPEC §四十一's 唯一 ID (core ADR-0002): what 复制 hands an AI and what a batch
+     * instruction names this note by. Blank for a row an older peer sent without
+     * one — [OrgModel.uid] falls back to `local:<id>` so no row is anonymous.
+     */
+    val uuid: String = "",
     val title: String,
     val body: String,
     val pinned: Boolean,
@@ -121,6 +127,8 @@ data class OrgSubtask(
 
 data class OrgTask(
     val id: Long,
+    /** The task's 唯一 ID; see [OrgNote.uuid]. */
+    val uuid: String = "",
     /** `0` is the inbox — a sentinel, not a row. */
     val list: Long,
     val title: String,
@@ -226,8 +234,12 @@ data class SyncState(
 
 /** What one call answered. */
 sealed interface Reply {
-    /** The structure changed; redraw from this. */
-    data class Updated(val view: View) : Reply
+    /**
+     * The structure changed; redraw from this. `notice` is the line the reply has to
+     * say that the view cannot — 指令's own count of what landed and what was
+     * refused — and is empty for every request that has nothing to add.
+     */
+    data class Updated(val view: View, val notice: String = "") : Reply
 
     /** It stuck, and there is nothing new to draw (a keystroke, a tick, a flush). */
     data object Done : Reply
@@ -248,7 +260,7 @@ internal fun parseReply(raw: String?): Reply {
         return Reply.Failed(json.optString("error").ifEmpty { "未知错误" })
     }
     val view = json.optJSONObject("view") ?: return Reply.Done
-    return Reply.Updated(parseView(view))
+    return Reply.Updated(parseView(view), json.optString("notice"))
 }
 
 private fun parseView(json: JSONObject): View = View(
@@ -317,6 +329,7 @@ private fun parseOrg(json: JSONObject) = OrgCatalog(
 
 private fun parseNote(json: JSONObject) = OrgNote(
     id = json.getLong("id"),
+    uuid = json.optString("uuid"),
     title = json.optString("title"),
     body = json.optString("body"),
     pinned = json.optBoolean("pinned"),
@@ -328,6 +341,7 @@ private fun parseNote(json: JSONObject) = OrgNote(
 
 private fun parseTask(json: JSONObject) = OrgTask(
     id = json.getLong("id"),
+    uuid = json.optString("uuid"),
     list = json.optLong("list"),
     title = json.optString("title"),
     notes = json.optString("notes"),
