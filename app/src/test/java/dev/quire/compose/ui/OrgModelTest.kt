@@ -565,5 +565,105 @@ class OrgModelTest {
         assertEquals("全部", OrgModel.smartNames[ORG_VIEW_ALL])
     }
 
+    // ─── 复制 out with a 唯一 ID ───────────────────────────────────────────────
+
+    @Test
+    fun a_note_copy_carries_its_unique_id_on_its_own_line() {
+        val uuid = "a".repeat(32)
+        val catalog = OrgCatalog.Empty.copy(
+            notes = listOf(
+                note(1, body = "买了牛奶").copy(uuid = uuid),
+                // A row an older peer sent without one falls back to `local:<id>`,
+                // so no row is ever anonymous to a batch.
+                note(2, title = "会议"),
+            ),
+        )
+        // The body is the note's text; a title-only note falls back to its title.
+        assertEquals(
+            "买了牛奶\nID: $uuid\n\n会议\nID: local:2",
+            OrgModel.noteCopyText(catalog, listOf(1, 2)),
+        )
+        // The order is the caller's — the page draws them, and the text keeps it.
+        assertEquals(
+            "会议\nID: local:2\n\n买了牛奶\nID: $uuid",
+            OrgModel.noteCopyText(catalog, listOf(2, 1)),
+        )
+        // An id that names nothing is skipped rather than invented.
+        assertEquals("买了牛奶\nID: $uuid", OrgModel.noteCopyText(catalog, listOf(1, 404)))
+    }
+
+    @Test
+    fun a_task_copy_carries_its_title_notes_and_unique_id() {
+        val uuid = "b".repeat(32)
+        val catalog = OrgCatalog.Empty.copy(
+            tasks = listOf(
+                task(1, title = "写报告").copy(uuid = uuid, notes = "先拉数据"),
+                // A title-less row says 无标题 rather than opening on a blank line.
+                task(2, title = ""),
+            ),
+        )
+        assertEquals(
+            "写报告\n\n先拉数据\n\nID: $uuid\n\n无标题\n\nID: local:2",
+            OrgModel.taskCopyText(catalog, listOf(1, 2)),
+        )
+    }
+
+    // ─── 反向筛选: the filter's other half ────────────────────────────────────
+
+    @Test
+    fun the_task_tag_row_folds_the_tasks_tags_not_the_notes() {
+        val catalog = OrgCatalog(
+            notes = listOf(note(1, tags = listOf("备忘"))),
+            tasks = listOf(task(1, tags = listOf("工作/项目")), task(2, tags = listOf("工作"))),
+            lists = emptyList(),
+        )
+        // 任务's row counts the tasks' tags: an answer about notes would filter rows
+        // that are not on the screen.
+        assertEquals(
+            listOf("工作" to 2),
+            OrgModel.tagChips(catalog, "", isTask = true).map { it.name to it.count },
+        )
+        // The notes' own row is unmoved by the tasks.
+        assertEquals(listOf("备忘" to 1), OrgModel.tagChips(catalog).map { it.name to it.count })
+        // One level down, the child's own segment.
+        assertEquals(
+            listOf("工作/项目" to 1),
+            OrgModel.tagChips(catalog, "工作", isTask = true).map { it.name to it.count },
+        )
+    }
+
+    @Test
+    fun the_exclude_half_hides_a_subtree_and_is_not_the_include_half() {
+        val catalog = OrgCatalog.Empty.copy(
+            notes = listOf(
+                note(1, tags = listOf("项目/工作")),
+                note(2, tags = listOf("项目2")),
+                note(3, tags = listOf("别的")),
+            ),
+        )
+        // Hiding `项目` hides its subtree and leaves `项目2` alone — the same
+        // segment boundary, with the answer turned around.
+        assertEquals(
+            listOf(2L, 3L),
+            OrgModel.notes(catalog, "", "", 0, -1, exclude = setOf("项目")).map { it.id }.sorted(),
+        )
+        // The two halves are asked separately, so a hidden path leaves the include
+        // half alone: here nothing is kept and only 项目2 is hidden.
+        assertEquals(
+            listOf(1L, 3L),
+            OrgModel.notes(catalog, "", "", 0, -1, exclude = setOf("项目2")).map { it.id }.sorted(),
+        )
+        // An empty set hides nothing.
+        assertEquals(3, OrgModel.notes(catalog, "", "", 0, -1, exclude = emptySet()).size)
+    }
+
+    @Test
+    fun the_hidden_set_reads_back_as_its_own_line() {
+        assertEquals("", OrgModel.excludedLabel(emptySet()))
+        // Sorted the way the desktop's `BTreeSet` sorts — by code point, so 工作
+        // before 项目 — and each path read as the label its chips carry.
+        assertEquals("排除 #工作 #项目", OrgModel.excludedLabel(setOf("项目", "工作")))
+    }
+
     private fun ids(rows: List<OrgModel.TaskRow>): List<Long> = rows.map { it.id }
 }

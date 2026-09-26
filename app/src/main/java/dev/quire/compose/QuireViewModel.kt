@@ -53,10 +53,17 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     var error by mutableStateOf<String?>(null)
         private set
 
-    /** A one-shot startup notice (a recovered backup), dismissed by the user. */
+    /** The line the notice bar shows — a recovered backup, or 指令's own count. */
     var notice by mutableStateOf<String?>(null)
         private set
-    private var noticeTaken = false
+
+    /**
+     * The last line the bar adopted, so a reply repeating it does not re-show it.
+     * The Rust side holds the notice until something replaces it and clones it
+     * into every reply, so without this a dismissed startup notice would come back
+     * on the next keystroke.
+     */
+    private var lastNotice: String? = null
 
     /**
      * The block a reply just created, waiting for the caret.
@@ -225,8 +232,21 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     var orgShowDone by mutableStateOf(false)
         private set
 
-    /** The 笔记 tab's tag filter; `""` is 全部笔记. */
+    /**
+     * The tag filter's *include* half: the path being kept; `""` is no filter.
+     * Shared by both tabs — the same question asked of whichever half is showing —
+     * so it is one field rather than one per page.
+     */
     var orgTag by mutableStateOf("")
+        private set
+
+    /**
+     * The tag filter's *exclude* half: the paths being hidden, each hiding its own
+     * subtree. The desktop's `org_excluded`. A row carrying a tag at or under a
+     * hidden path is not drawn, which is what makes 反向筛选 more than the include
+     * half turned around — the two are asked and answered separately.
+     */
+    var orgExcluded by mutableStateOf<Set<String>>(emptySet())
         private set
 
     /** The open task, or `-1` for the list. */
@@ -281,6 +301,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgTab = tab
         orgList = -1
         orgTag = ""
+        orgExcluded = emptySet()
         orgQuery = ""
         orgSearchOpen = false
         orgNoteMenu = null
@@ -342,6 +363,27 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun orgTagUp() {
         orgTag = OrgModel.tagParentPath(orgTag).orEmpty()
+    }
+
+    /**
+     * ⊖ on a tag chip: add or remove the path from the hidden set — the filter's
+     * other half, and not the include half turned around. Hiding `项目` hides its
+     * subtree and leaves `项目2` alone, and the include path is untouched, so a
+     * user can keep one path and hide another at the same time.
+     */
+    fun orgToggleTagExcluded(path: String) {
+        if (path.isEmpty()) return
+        orgExcluded = if (path in orgExcluded) orgExcluded - path else orgExcluded + path
+    }
+
+    /**
+     * 清除筛选: both halves of the tag filter at once — the bar's ✕ and the overflow
+     * menu's 清除过滤 reach this. The needle is deliberately separate: the search
+     * field's own ✕ is where a search is cleared.
+     */
+    fun orgClearFilters() {
+        orgTag = ""
+        orgExcluded = emptySet()
     }
 
     fun orgToggleShowDone() {
@@ -552,13 +594,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         bridge.orgQuickAdd(list, title, MarkdownText.tagString(title), null)
     }
 
-    fun orgNoteTitle(note: Long, title: String) = act { bridge.orgNoteTitle(note, title) }
-
-    fun orgNoteBody(note: Long, body: String) = act { bridge.orgNoteBody(note, body) }
-
     fun orgToggleNotePinned(note: Long, pinned: Boolean) = act { bridge.orgNotePinned(note, pinned) }
-
-    fun orgNoteTags(note: Long, tags: String) = act { bridge.orgNoteTags(note, tags) }
 
     /**
      * Delete a note — **deferred** (ADR-0015). The row is hidden the moment this
@@ -672,6 +708,20 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun orgRedo() = act { bridge.orgRedo() }
 
+    /**
+     * 指令 (SPEC §四十一): one batch of AI instructions, pasted as
+     * `{"operations":[…]}` and applied by the Rust side **in order** and as **one**
+     * undo step. `isTask` names the half the paste is for — the two halves take
+     * different actions, and a batch of task actions on the notes half is refused
+     * action by action rather than by the batch.
+     *
+     * The reply's own line — `指令完成：成功 N / 失败 M` — is forced into the notice
+     * bar rather than left to the change-detection every other reply uses: a second
+     * batch with the same counts is still a second batch, and a bar that stayed
+     * silent about it would read as a paste that did nothing.
+     */
+    fun orgRunCommands(isTask: Boolean, json: String) = command { bridge.orgCommands(isTask, json) }
+
     // ─── LAN sync ───────────────────────────────────────────────────────────
     //
     // The page's verbs, each one a whole-view reply. `openSync` doubles as the
@@ -771,6 +821,28 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * `act`, plus: the reply's own line is shown even when it repeats the last.
+     * 指令's count is the whole answer a batch has, so two identical batches must
+     * both say so.
+     */
+    private fun command(action: () -> Reply) {
+        viewModelScope.launch {
+            val reply = withContext(bridgeDispatcher) { runCatching(action) }
+            reply
+                .onSuccess { result ->
+                    apply(result)
+                    (result as? Reply.Updated)?.view?.notice
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let {
+                            notice = it
+                            lastNotice = it
+                        }
+                }
+                .onFailure { error = it.message ?: it.toString() }
+        }
+    }
+
     /** `act`, plus: put the caret in the block this reply created. */
     private fun actCreatingBlock(action: () -> Reply) {
         val known = view?.blocks?.mapTo(HashSet()) { it.id } ?: emptySet()
@@ -792,14 +864,18 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
             is Reply.Updated -> {
                 view = reply.view
                 error = null
-                if (!noticeTaken && reply.view.notice != null) {
-                    notice = reply.view.notice
-                    noticeTaken = true
-                }
+                adoptNotice(reply.view.notice)
             }
             Reply.Done -> error = null
             is Reply.Failed -> error = reply.message
         }
+    }
+
+    /** Show a reply's own line, unless it is the one the bar is already on. */
+    private fun adoptNotice(line: String?) {
+        if (line.isNullOrEmpty() || line == lastNotice) return
+        notice = line
+        lastNotice = line
     }
 
     private fun flush() {

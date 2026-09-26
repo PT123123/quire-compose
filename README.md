@@ -108,6 +108,15 @@ either of the other two destinations rather than leaving the app.
 
 - **收件箱**: notes as cards — the text, its tags on an accent line, its age —
   with a tag chip row, a hideable search field, and 排序（最新创建 / 最新更新 / 按内容）.
+- **A tag is a path, and the filter has two halves.** Tapping a chip keeps its
+  subtree (`项目` keeps `项目/工作` and drops `项目2`); each chip's **⊖** hides that
+  subtree instead (反向筛选), so one path can be kept while another is hidden. The
+  任务 page carries the same row, folding the *tasks'* own tags.
+- **复制 hands out a 唯一 ID, and 指令 takes a batch back.** 复制 — on a selection,
+  on 全部, and on a single row — writes each row with `ID: <uuid>`, the name a sync
+  cannot renumber. The overflow's **指令…** pastes a `{"operations":[…]}` batch that
+  names those ids, applied in order as **one** 撤销 step; an action a half cannot
+  take is refused by name and counted, never silently skipped.
 - **Capture is instant.** The round ＋ opens a non-animated overlay — a multi-line
   field, a markdown toolbar (`#`, `B`, `/`, `•`, `1.`), a ➤ send and tag
   suggestions — with the caret asked for on the frame it appears, so the keyboard
@@ -123,7 +132,8 @@ either of the other two destinations rather than leaving the app.
   撤销 drops work that was never sent. There is no confirmation dialog.
 - **任务**: the five smart views (收集箱 / 今天 / 近七天 / 全部 / 已完成), five sorts
   behind ⇅, per-page search, glass rows carrying the list's dot, the priority, the
-  deadline and the tags, and a 4 dp progress bar with 已完成 X / Y.
+  deadline and the tags, and a 4 dp progress bar with 已完成 X / Y — plus the same
+  two-half tag filter, folding the tasks' own tags.
 - The task detail form: list, priority, deadline, repeat, tags, notes and a
   checklist.
 - **平铺**: one column per list on cards, with a long-press drag to move a task
@@ -175,9 +185,8 @@ Said plainly, because a shell that pretends is worse than one that is small:
   keyboard's backspace is not a key event a Compose text field can see. Deleting
   an empty block goes through the block menu. (The organizer's fields do not need
   it: a note is one plain-text field.)
-- **Multi-select** in 收件箱 / 任务 (选择 / 多选, with bulk pin, tag and delete) is not
-  here. The reference app has it and it is a mode with its own toolbar, selection
-  model and undo story — half of one would be worse than none (ADR-0014).
+- **The board ignores the tag filter.** 平铺 files by list and has no tag column, so
+  the tag filter is a list-mode control — the desktop's board answers the same way.
 - **No persistent 回收站.** The deferred delete buys three seconds, not a bin: a
   real one needs soft delete in `quire-core` (a column, the store, the merge), a
   settings page, and restore/purge — a cross-repo slice of its own (ADR-0015).

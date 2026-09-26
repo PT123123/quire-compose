@@ -93,6 +93,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -130,6 +131,44 @@ import kotlin.math.roundToInt
  */
 private const val ORG_DRAFT_MS = 300L
 
+/**
+ * 指令's editable templates, the desktop's own (`NOTE_COMMAND_EXAMPLE` /
+ * `TASK_COMMAND_EXAMPLE`) — kept verbatim so one prompt works against either
+ * shell and against the reference server the JSON came from. 复制示例 puts one on
+ * the clipboard, so the batch's shape is discoverable without a manual.
+ */
+private const val NOTE_COMMAND_EXAMPLE = """{
+  "operations": [
+    {"action": "create", "title": "新笔记", "content": "正文 #项目/工作", "tags": ["项目/工作"]},
+    {"action": "update", "uuid": "在此填笔记ID", "title": "改后标题", "content": "改后的正文", "tags": ["项目"]},
+    {"action": "add_tags", "uuid": "在此填笔记ID", "tags": ["重要", "待办"]},
+    {"action": "remove_tags", "uuid": "在此填笔记ID", "tags": ["待办"]},
+    {"action": "set_tags", "uuid": "在此填笔记ID", "tags": ["项目/工作", "重要"]},
+    {"action": "comment", "uuid": "在此填笔记ID", "content": "给这条笔记加一条评论"},
+    {"action": "delete", "uuid": "在此填笔记ID"}
+  ]
+}"""
+
+private const val TASK_COMMAND_EXAMPLE = """{
+  "operations": [
+    {"action": "create", "title": "新任务", "content": "备注", "tags": ["项目/工作"], "priority": 2, "due_date": "2026-10-01T00:00:00Z", "list_id": 0},
+    {"action": "update", "uuid": "在此填任务ID", "title": "改后标题", "content": "改后备注"},
+    {"action": "add_tags", "uuid": "在此填任务ID", "tags": ["重要"]},
+    {"action": "remove_tags", "uuid": "在此填任务ID", "tags": ["重要"]},
+    {"action": "set_tags", "uuid": "在此填任务ID", "tags": ["项目/工作", "重要"]},
+    {"action": "set_completed", "uuid": "在此填任务ID", "completed": true},
+    {"action": "move", "uuid": "在此填任务ID", "list_name": "工作"},
+    {"action": "set_priority", "uuid": "在此填任务ID", "priority": 3},
+    {"action": "set_due", "uuid": "在此填任务ID", "due_date": "2026-10-01T00:00:00Z"},
+    {"action": "set_due", "uuid": "在此填任务ID", "clear_due": true},
+    {"action": "add_subtask", "uuid": "在此填任务ID", "title": "子任务 1"},
+    {"action": "set_subtask", "uuid": "在此填任务ID", "subtask_id": 1, "completed": true},
+    {"action": "remove_subtask", "uuid": "在此填任务ID", "subtask_id": 1},
+    {"action": "comment", "uuid": "在此填任务ID", "content": "追加到任务备注的评论"},
+    {"action": "delete", "uuid": "在此填任务ID"}
+  ]
+}"""
+
 /** The palette's one green Material's scheme does not carry: 低 priority. */
 private val OrgSuccess = Color(0xFF3FB950)
 
@@ -152,15 +191,16 @@ fun organizerInDetail(vm: QuireViewModel): Boolean =
 fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
     var sortOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    var commandsOpen by remember { mutableStateOf(false) }
     val catalog = vm.view?.org ?: OrgCatalog.Empty
     if (vm.orgSelecting) {
         // 全选 covers what the page is *showing*: the filter is what the user is
         // looking at, and a 全选 that reached past it would be a lie about the rows
         // it lit. A row inside its 撤销 window is not on screen, so it is not in it.
         val clipboard = LocalClipboardManager.current
-        val shown = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, vm.pendingDelete) {
+        val shown = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgExcluded, vm.orgNoteSort, vm.pendingDelete) {
             val hidden = vm.pendingDelete?.takeIf { !it.isTask }?.ids ?: emptySet()
-            OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1)
+            OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1, vm.orgExcluded)
                 .filter { it.id !in hidden }
                 .map { it.id }
         }
@@ -171,12 +211,13 @@ fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
             onClose = vm::orgStopSelecting,
         ) {
             OrgSelectionVerb("复制") {
-                // The reference app's 复制: the picked notes, one per line, in the
-                // order the page draws them.
-                val text = OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1)
+                // The picked notes, in the order the page draws them, each with its
+                // 唯一 ID on a line of its own — the text an AI reads and answers
+                // with 指令, naming the rows by the id a sync cannot renumber.
+                val ids = OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1, vm.orgExcluded)
                     .filter { it.id in vm.orgSelection }
-                    .joinToString("\n\n") { it.content }
-                clipboard.setText(AnnotatedString(text))
+                    .map { it.id }
+                clipboard.setText(AnnotatedString(OrgModel.noteCopyText(catalog, ids)))
             }
             OrgSelectionVerb("删除", danger = true) { vm.orgDeleteSelected(isTask = false) }
         }
@@ -202,7 +243,14 @@ fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
         )
     }
     if (menuOpen) {
-        OrgNotesMenuSheet(vm = vm, onDismiss = { menuOpen = false })
+        OrgNotesMenuSheet(
+            vm = vm,
+            onDismiss = { menuOpen = false },
+            onCommands = { menuOpen = false; commandsOpen = true },
+        )
+    }
+    if (commandsOpen) {
+        OrgCommandDialog(isTask = false, vm = vm, onDismiss = { commandsOpen = false })
     }
 }
 
@@ -212,11 +260,14 @@ fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
 fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
     var sortOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    var commandsOpen by remember { mutableStateOf(false) }
     val catalog = vm.view?.org ?: OrgCatalog.Empty
     if (vm.orgSelecting) {
         val dates = remember(catalog) { OrgModel.Dates.now() }
+        val clipboard = LocalClipboardManager.current
         val shown = remember(
-            catalog, vm.orgView, vm.orgList, vm.orgQuery, vm.orgTaskSort, vm.orgShowDone, vm.pendingDelete, dates,
+            catalog, vm.orgView, vm.orgList, vm.orgQuery, vm.orgTaskSort, vm.orgShowDone,
+            vm.orgTag, vm.orgExcluded, vm.pendingDelete, dates,
         ) {
             val hidden = vm.pendingDelete?.takeIf { it.isTask }?.ids ?: emptySet()
             OrgModel.tasks(
@@ -228,6 +279,8 @@ fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
                 selected = -1,
                 showDone = vm.orgShowDone,
                 dates = dates,
+                tag = vm.orgTag,
+                exclude = vm.orgExcluded,
             ).filter { it.id !in hidden }.map { it.id }
         }
         OrgSelectionBar(
@@ -236,6 +289,23 @@ fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
             onSelectAll = { vm.orgSelectAll(shown) },
             onClose = vm::orgStopSelecting,
         ) {
+            OrgSelectionVerb("复制") {
+                // The tasks' half of 复制: a title, its 备注, then the 唯一 ID — the
+                // same shape the notes' half sends, and the desktop's own.
+                val ids = OrgModel.tasks(
+                    catalog = catalog,
+                    view = vm.orgView,
+                    list = vm.orgList,
+                    query = vm.orgQuery,
+                    sort = vm.orgTaskSort,
+                    selected = -1,
+                    showDone = vm.orgShowDone,
+                    dates = dates,
+                    tag = vm.orgTag,
+                    exclude = vm.orgExcluded,
+                ).filter { it.id in vm.orgSelection }.map { it.id }
+                clipboard.setText(AnnotatedString(OrgModel.taskCopyText(catalog, ids)))
+            }
             OrgSelectionVerb("完成") { vm.orgCompleteSelected(true) }
             OrgSelectionVerb("删除", danger = true) { vm.orgDeleteSelected(isTask = true) }
         }
@@ -261,7 +331,14 @@ fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
         )
     }
     if (menuOpen) {
-        OrgTasksMenuSheet(vm = vm, onDismiss = { menuOpen = false })
+        OrgTasksMenuSheet(
+            vm = vm,
+            onDismiss = { menuOpen = false },
+            onCommands = { menuOpen = false; commandsOpen = true },
+        )
+    }
+    if (commandsOpen) {
+        OrgCommandDialog(isTask = true, vm = vm, onDismiss = { commandsOpen = false })
     }
 }
 
@@ -412,8 +489,8 @@ fun NotesPage(vm: QuireViewModel) {
     // still in the catalog — the command has not been sent — so the projection is
     // filtered, which is what makes the vanish instant and the undo free.
     val hidden = vm.pendingDelete?.takeIf { !it.isTask }?.ids ?: emptySet()
-    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, hidden) {
-        OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, selected = -1)
+    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgExcluded, vm.orgNoteSort, hidden) {
+        OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, selected = -1, exclude = vm.orgExcluded)
             .filter { it.id !in hidden }
     }
 
@@ -427,8 +504,21 @@ fun NotesPage(vm: QuireViewModel) {
                     onClose = vm::closeOrgSearch,
                 )
             }
-            NoteTagChips(catalog = catalog, selected = vm.orgTag, onPick = vm::orgPickTag)
-            TagFilterBar(path = vm.orgTag, onUp = vm::orgTagUp, onClear = { vm.orgPickTag("") })
+            OrgTagChips(
+                catalog = catalog,
+                selected = vm.orgTag,
+                excluded = vm.orgExcluded,
+                isTask = false,
+                allLabel = "全部笔记",
+                onPick = vm::orgPickTag,
+                onExclude = vm::orgToggleTagExcluded,
+            )
+            TagFilterBar(
+                path = vm.orgTag,
+                excluded = vm.orgExcluded,
+                onUp = vm::orgTagUp,
+                onClear = vm::orgClearFilters,
+            )
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -457,7 +547,9 @@ fun NotesPage(vm: QuireViewModel) {
                 if (rows.isEmpty()) {
                     item(key = "empty") {
                         OrgEmpty(
-                            text = if (vm.orgQuery.isNotEmpty() || vm.orgTag.isNotEmpty()) {
+                            text = if (vm.orgQuery.isNotEmpty() || vm.orgTag.isNotEmpty() ||
+                                vm.orgExcluded.isNotEmpty()
+                            ) {
                                 "没有匹配的笔记"
                             } else {
                                 "还没有笔记"
@@ -488,16 +580,33 @@ fun NotesPage(vm: QuireViewModel) {
 }
 
 /**
- * The tag row: the level the filter is on, one chip per child tag.
+ * A tab's tag row: the level the filter is on, one chip per child tag.
  *
- * At the top level the chips are the tags themselves and 全部笔记 is the "no
- * filter" chip. One level down they are the *next segment* of everything under the
- * path, so `项目` → `工作` → `ActivityWatch` is three taps — the reference app's own
- * 层级标签 walk. A chip's number is how many notes tapping it would leave on screen.
+ * At the top level the chips are the tags themselves; one level down they are the
+ * *next segment* of everything under the path, so `项目` → `工作` → `ActivityWatch`
+ * is three taps — the reference app's own 层级标签 walk. A chip's number is how
+ * many rows tapping it would leave on screen.
+ *
+ * Each chip also carries a **⊖** — the filter's other half (反向筛选). Tapping it
+ * *hides* that path and its subtree and leaves the include half alone, so one path
+ * can be kept while another is hidden. `isTask` decides whose tags are folded:
+ * a row answering about notes while tasks were on screen would filter rows that are
+ * not there.
+ *
+ * `allLabel` is the "no filter" chip, drawn only where the tab has no smarter row
+ * of its own to say it — 收件箱's 全部笔记. 任务's smart chips *are* that row.
  */
 @Composable
-private fun NoteTagChips(catalog: OrgCatalog, selected: String, onPick: (String) -> Unit) {
-    val chips = remember(catalog, selected) { OrgModel.tagChips(catalog, selected) }
+private fun OrgTagChips(
+    catalog: OrgCatalog,
+    selected: String,
+    excluded: Set<String>,
+    isTask: Boolean,
+    allLabel: String?,
+    onPick: (String) -> Unit,
+    onExclude: (String) -> Unit,
+) {
+    val chips = remember(catalog, selected, isTask) { OrgModel.tagChips(catalog, selected, isTask) }
     if (chips.isEmpty()) return
     LazyRow(
         modifier = Modifier.fillMaxWidth().height(38.dp),
@@ -505,9 +614,9 @@ private fun NoteTagChips(catalog: OrgCatalog, selected: String, onPick: (String)
         horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (selected.isEmpty()) {
+        if (allLabel != null && selected.isEmpty()) {
             item(key = "all-notes") {
-                OrgChip(label = "全部笔记", selected = true, onClick = { onPick("") })
+                OrgChip(label = allLabel, selected = true, onClick = { onPick("") })
             }
         }
         // The child's own segment rather than the whole path: the path is the filter
@@ -515,6 +624,10 @@ private fun NoteTagChips(catalog: OrgCatalog, selected: String, onPick: (String)
         items(chips, key = { "tag-${it.name}" }) { chip ->
             OrgChip(
                 label = "#${OrgModel.tagSegments(chip.name).last()} ${chip.count}",
+                // A chip paints its own half: a path in the hidden set reads struck
+                // so the row says whether it is keeping or hiding its subtree.
+                excluded = chip.name in excluded,
+                onExcludeToggle = { onExclude(chip.name) },
                 onClick = { onPick(chip.name) },
             )
         }
@@ -522,45 +635,60 @@ private fun NoteTagChips(catalog: OrgCatalog, selected: String, onPick: (String)
 }
 
 /**
- * The tag filter bar: where the filter is, one level up, and out.
+ * The tag filter bar: where the filter is, one level up, and out — the *whole*
+ * filter, so it draws whenever either half is set.
  *
  * The reference app's own bar. ↑ is drawn only when there is a level above — a
  * button whose only answer is "you are already there" is a button that does
- * nothing — and ✕ is the way back to 全部笔记 without walking up a level at a time.
+ * nothing — and ✕ clears **both halves**, the include path and the hidden set. The
+ * hidden paths are spelled out under the path, because a filter the user cannot
+ * see is a filter they cannot undo.
  */
 @Composable
-private fun TagFilterBar(path: String, onUp: () -> Unit, onClear: () -> Unit) {
-    if (path.isEmpty()) return
+private fun TagFilterBar(path: String, excluded: Set<String>, onUp: () -> Unit, onClear: () -> Unit) {
+    if (path.isEmpty() && excluded.isEmpty()) return
     val colors = LocalQuireColors.current
     val parent = OrgModel.tagParentPath(path)
-    Row(
-        modifier = Modifier.fillMaxWidth().height(36.dp).padding(end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onUp, enabled = parent != null, modifier = Modifier.size(36.dp)) {
-            if (parent != null) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(36.dp).padding(end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onUp, enabled = parent != null, modifier = Modifier.size(36.dp)) {
+                if (parent != null) {
+                    Icon(
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = "返回上级标签",
+                        tint = colors.accentText,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+            Text(
+                text = if (path.isEmpty()) "标签" else OrgModel.tagBreadcrumb(path),
+                style = QuireType.caption.copy(fontSize = 13.sp),
+                color = if (path.isEmpty()) colors.textMuted else colors.accentText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
                 Icon(
-                    Icons.Default.KeyboardArrowUp,
-                    contentDescription = "返回上级标签",
-                    tint = colors.accentText,
-                    modifier = Modifier.size(20.dp),
+                    Icons.Default.Close,
+                    contentDescription = "清除筛选",
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }
-        Text(
-            text = OrgModel.tagBreadcrumb(path),
-            style = QuireType.caption.copy(fontSize = 13.sp),
-            color = colors.accentText,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
-            Icon(
-                Icons.Default.Close,
-                contentDescription = "清除筛选",
-                tint = colors.textSecondary,
-                modifier = Modifier.size(18.dp),
+        if (excluded.isNotEmpty()) {
+            Text(
+                text = OrgModel.excludedLabel(excluded),
+                style = QuireType.caption.copy(fontSize = 13.sp),
+                color = colors.danger,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 40.dp, end = 12.dp, bottom = 4.dp),
             )
         }
     }
@@ -591,7 +719,8 @@ fun TasksPage(vm: QuireViewModel) {
     }
 
     val rows = remember(
-        catalog, vm.orgView, vm.orgList, vm.orgQuery, vm.orgTaskSort, vm.orgShowDone, vm.orgTaskSel, hidden,
+        catalog, vm.orgView, vm.orgList, vm.orgQuery, vm.orgTaskSort, vm.orgShowDone, vm.orgTaskSel,
+        vm.orgTag, vm.orgExcluded, hidden,
     ) {
         OrgModel.tasks(
             catalog = catalog,
@@ -602,6 +731,8 @@ fun TasksPage(vm: QuireViewModel) {
             selected = vm.orgTaskSel,
             showDone = vm.orgShowDone,
             dates = dates,
+            tag = vm.orgTag,
+            exclude = vm.orgExcluded,
         ).filter { it.id !in hidden }
     }
     val (done, total) = remember(catalog) { OrgModel.progress(catalog) }
@@ -619,6 +750,27 @@ fun TasksPage(vm: QuireViewModel) {
             }
             SmartChips(catalog = catalog, dates = dates, vm = vm)
             ListChips(catalog = catalog, vm = vm)
+            // The tasks' own tag row: the same question the notes' page asks, of the
+            // other list, with the same include / exclude halves. It is not drawn on
+            // the board, which files by list and has no tag column (the desktop's
+            // board ignores the tag filter for the same reason).
+            if (!board) {
+                OrgTagChips(
+                    catalog = catalog,
+                    selected = vm.orgTag,
+                    excluded = vm.orgExcluded,
+                    isTask = true,
+                    allLabel = null,
+                    onPick = vm::orgPickTag,
+                    onExclude = vm::orgToggleTagExcluded,
+                )
+                TagFilterBar(
+                    path = vm.orgTag,
+                    excluded = vm.orgExcluded,
+                    onUp = vm::orgTagUp,
+                    onClear = vm::orgClearFilters,
+                )
+            }
 
             if (board) {
                 BoardPane(catalog = catalog, dates = dates, vm = vm, hidden = hidden)
@@ -644,7 +796,16 @@ fun TasksPage(vm: QuireViewModel) {
                     }
                     if (rows.isEmpty()) {
                         item(key = "empty") {
-                            OrgEmpty(text = "暂无任务", hint = "点右下角 ＋ 添加任务")
+                            OrgEmpty(
+                                text = if (vm.orgQuery.isNotEmpty() || vm.orgTag.isNotEmpty() ||
+                                    vm.orgExcluded.isNotEmpty()
+                                ) {
+                                    "没有匹配的任务"
+                                } else {
+                                    "暂无任务"
+                                },
+                                hint = "点右下角 ＋ 添加任务",
+                            )
                         }
                     }
                 }
@@ -1317,10 +1478,10 @@ private fun OrgSortSheet(
     }
 }
 
-/** 收件箱's overflow: the whole list, onto the clipboard. */
+/** 收件箱's overflow: the whole list, onto the clipboard, and the 指令 door. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun OrgNotesMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit) {
+private fun OrgNotesMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit, onCommands: () -> Unit) {
     val colors = LocalQuireColors.current
     val clipboard = LocalClipboardManager.current
     val catalog = vm.view?.org ?: OrgCatalog.Empty
@@ -1335,26 +1496,28 @@ private fun OrgNotesMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit) {
                 vm.orgBeginSelecting()
             }
             OrgSheetItem("清除过滤") {
-                vm.orgPickTag("")
+                vm.orgClearFilters()
                 vm.orgSetQuery("")
             }
             OrgSheetItem("复制全部") {
-                // Every note the filter is showing, one per line — the reference
-                // app's own button, and the reason it is spelled out here rather
-                // than left to a text-selection gesture.
-                val shown = OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1)
-                clipboard.setText(AnnotatedString(shown.joinToString("\n\n") { it.content }))
+                // Every note the filter is showing, each with its 唯一 ID on a line
+                // of its own — the text 指令's batch names the rows by.
+                val shown = OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1, vm.orgExcluded)
+                clipboard.setText(AnnotatedString(OrgModel.noteCopyText(catalog, shown.map { it.id })))
                 onDismiss()
             }
+            OrgSheetItem("指令…") { onCommands() }
         }
     }
 }
 
-/** 任务's overflow: the view switch, and the one list verb that is not a chip. */
+/** 任务's overflow: the view switch, the list verb that is not a chip, and 指令. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun OrgTasksMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit) {
+private fun OrgTasksMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit, onCommands: () -> Unit) {
     val colors = LocalQuireColors.current
+    val clipboard = LocalClipboardManager.current
+    val catalog = vm.view?.org ?: OrgCatalog.Empty
     var creating by remember { mutableStateOf(false) }
     if (creating) {
         OrgTextDialog(
@@ -1392,7 +1555,26 @@ private fun OrgTasksMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit) {
                 onDismiss()
                 vm.orgBeginSelecting()
             }
+            OrgSheetItem("复制全部") {
+                // Every task the filter is showing, each with its 唯一 ID — the
+                // tasks' half of what 复制全部 hands an AI.
+                val shown = OrgModel.tasks(
+                    catalog = catalog,
+                    view = vm.orgView,
+                    list = vm.orgList,
+                    query = vm.orgQuery,
+                    sort = vm.orgTaskSort,
+                    selected = -1,
+                    showDone = vm.orgShowDone,
+                    dates = OrgModel.Dates.now(),
+                    tag = vm.orgTag,
+                    exclude = vm.orgExcluded,
+                )
+                clipboard.setText(AnnotatedString(OrgModel.taskCopyText(catalog, shown.map { it.id })))
+                onDismiss()
+            }
             OrgSheetItem("新建清单") { creating = true }
+            OrgSheetItem("指令…") { onCommands() }
         }
     }
 }
@@ -1429,7 +1611,10 @@ private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: Q
                 vm.openCommentComposer(row.id)
             }
             OrgSheetItem("复制内容") {
-                clipboard.setText(AnnotatedString(row.content))
+                // The one note, with its 唯一 ID on a line of its own — the smallest
+                // unit 复制 hands an AI, and the name a 指令 batch can act on.
+                val catalog = vm.view?.org ?: OrgCatalog.Empty
+                clipboard.setText(AnnotatedString(OrgModel.noteCopyText(catalog, listOf(row.id))))
                 onDismiss()
             }
             // The reference app's own migration, and its no-confirm rule: the note
@@ -1457,6 +1642,7 @@ private fun OrgTaskMenuSheet(
     vm: QuireViewModel,
 ) {
     val colors = LocalQuireColors.current
+    val clipboard = LocalClipboardManager.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = colors.surface,
@@ -1480,6 +1666,12 @@ private fun OrgTaskMenuSheet(
                 OrgSheetItem(if (chip.smart) "移到收集箱" else "移到「${chip.name}」") {
                     vm.orgMoveTask(row.id, chip.id)
                 }
+            }
+            OrgSheetItem("复制") {
+                // A title, its 备注, then the 唯一 ID — one task's worth of what the
+                // selection bar's 复制 hands an AI.
+                clipboard.setText(AnnotatedString(OrgModel.taskCopyText(catalog, listOf(row.id))))
+                onDismiss()
             }
             HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
             OrgSheetItem("删除任务", danger = true) {
@@ -1644,11 +1836,81 @@ private fun OrgTextDialog(
     )
 }
 
+/**
+ * 指令 (SPEC §四十一): paste one batch of AI instructions and apply it.
+ *
+ * The other half of 复制: the clipboard carries the rows with their 唯一 IDs, the AI
+ * answers with `{"operations":[…]}` naming those ids, and this applies the batch —
+ * in order, as **one** undo step, so one 撤销 takes the whole batch back. `isTask`
+ * names the half: a task action pasted on the notes half is refused action by
+ * action and *counted*, never silently skipped, and the count comes back in the
+ * notice bar.
+ *
+ * 复制示例 puts an editable template on the clipboard, so the batch's shape is
+ * discoverable without a manual. A payload the Rust side cannot read at all (bad
+ * JSON, no `operations`) fails the whole call and lands in the error bar instead.
+ */
+@Composable
+private fun OrgCommandDialog(isTask: Boolean, vm: QuireViewModel, onDismiss: () -> Unit) {
+    val colors = LocalQuireColors.current
+    val clipboard = LocalClipboardManager.current
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isTask) "任务指令" else "笔记指令") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = { Text("{\"operations\":[…]}") },
+                    minLines = 5,
+                    maxLines = 10,
+                    textStyle = QuireType.caption,
+                    modifier = Modifier.fillMaxWidth().imePadding(),
+                )
+                Text(
+                    text = "粘贴 AI 返回的 operations。整批作为一步撤销。",
+                    style = QuireType.caption,
+                    color = colors.textMuted,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    vm.orgRunCommands(isTask, text)
+                    onDismiss()
+                },
+                enabled = text.isNotBlank(),
+            ) { Text("应用") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(
+                    onClick = {
+                        clipboard.setText(
+                            AnnotatedString(if (isTask) TASK_COMMAND_EXAMPLE else NOTE_COMMAND_EXAMPLE),
+                        )
+                    },
+                ) { Text("复制示例") }
+                TextButton(onClick = onDismiss) { Text("取消") }
+            }
+        },
+    )
+}
+
 // ─── the small pieces ───────────────────────────────────────────────────────
 
 /**
- * One tappable chip: a smart view, a sort, a list, a priority. `selected` is the
- * one lit state the whole area uses.
+ * One tappable chip: a smart view, a sort, a list, a priority, a tag. `selected`
+ * is the one lit state the whole area uses.
+ *
+ * `onExcludeToggle` draws a **⊖** at the chip's trailing edge — the tag row's
+ * other half (反向筛选), where the chip's tap keeps a subtree and the ⊖ hides it.
+ * A finger cannot hover, so the control is drawn for every chip rather than
+ * revealed on one, and `excluded` strikes the label so a hidden path reads as
+ * hidden.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1659,8 +1921,12 @@ private fun OrgChip(
     small: Boolean = false,
     /** `>= 1` draws a palette dot before the label; `null` for none. */
     colorSlot: Int? = null,
+    /** The chip's path is in the hidden set: the label is struck and the ⊖ is lit. */
+    excluded: Boolean = false,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    /** The ⊖'s own tap; `null` for a chip with no hidden half. */
+    onExcludeToggle: (() -> Unit)? = null,
 ) {
     val colors = LocalQuireColors.current
     Row(
@@ -1675,7 +1941,14 @@ private fun OrgChip(
                     Modifier.clickable(onClick = onClick)
                 },
             )
-            .padding(horizontal = if (colorSlot != null && colorSlot > 0) Spacing.sm else 10.dp),
+            .padding(
+                start = if (colorSlot != null && colorSlot > 0) Spacing.sm else 10.dp,
+                end = when {
+                    onExcludeToggle != null -> 4.dp
+                    colorSlot != null && colorSlot > 0 -> Spacing.sm
+                    else -> 10.dp
+                },
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -1691,12 +1964,33 @@ private fun OrgChip(
             text = label,
             style = if (small) QuireType.caption else QuireType.ui,
             color = when {
+                excluded -> colors.danger
                 selected -> colors.textPrimary
                 accent -> colors.accentText
                 else -> colors.textSecondary
             },
             maxLines = 1,
+            textDecoration = if (excluded) TextDecoration.LineThrough else null,
         )
+        if (onExcludeToggle != null) {
+            // A circled bar rather than the reference's `⊘`: the same idea in a
+            // shape Compose draws without a rotated glyph.
+            Box(
+                modifier = Modifier
+                    .size(17.dp)
+                    .clip(CircleShape)
+                    .background(if (excluded) colors.danger.copy(alpha = 0.12f) else Color.Transparent)
+                    .border(1.dp, if (excluded) colors.danger else colors.borderStrong, CircleShape)
+                    .clickable(onClick = onExcludeToggle),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 9.dp, height = 1.5.dp)
+                        .background(if (excluded) colors.danger else colors.textMuted),
+                )
+            }
+        }
     }
 }
 

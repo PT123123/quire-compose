@@ -141,6 +141,23 @@ where it was (ADR-0016).
       statistics, pairing codes, and the reference app's cloud / backup /
       WiFi-transfer pages
 
+## M2.95 · 反向筛选, 复制 with a 唯一 ID, 指令 — ✅
+
+The three the desktop shell had and this one did not, all shell-side: no
+`quire-core` change and no rev bump (ADR-0019).
+
+- [x] 反向筛选: `orgExcluded` in the view model, a **⊖** on every tag chip, the hidden
+      paths spelled out under the breadcrumb, and ✕ clearing both halves
+- [x] A tag row on **both** tabs: `OrgModel.tagChips` takes an `isTask` flag, so the
+      任务 half folds the tasks' own tags instead of the notes'
+- [x] 复制 carries a **唯一 ID**: `noteCopyText` / `taskCopyText` shape the rows the
+      desktop's do, and the tasks gain 复制 / 复制全部 / a row's 复制
+- [x] 指令: a paste dialog behind each overflow, applying `{"operations":[…]}` in
+      order as one 撤销 step, with the desktop's template behind 复制示例
+- [x] The notice bar adopts a line on *change* rather than once, so 指令's count can
+      never be swallowed by a startup notice
+- [x] `OrgModelTest` +6 (59 JVM tests total), and the dead `orgNote*` wrappers removed
+
 ## Next (not started)
 
 Slices in the order they are worth doing, each one a vertical cut the way M1 and
@@ -156,10 +173,9 @@ M2 were:
 - **M6 · LAN share**: the read-only Markdown share on 5877 — the half of the LAN
   work `M2.75` did not take. **Sync** itself is done (`quire-core`'s protocol,
   wired in `rust/src/sync.rs` with the 同步 page on top).
-- **The organizer's tail**: multi-select with its bulk pin / tag / delete
-  (ADR-0014 says why it was left out), rolling a completed repeating task forward,
-  and a note body that renders more than plain text if a second content format is
-  ever wanted.
+- **The organizer's tail**: rolling a completed repeating task forward, a note body
+  that renders more than plain text, and a board that respects the tag filter
+  (多层标签 and 多选 are done — `M2.9` / `M2.95`).
 
 ## Verification notes
 

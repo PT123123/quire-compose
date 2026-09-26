@@ -4,6 +4,53 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0019 · The AI round trip and the filter's other half
+
+Decision: the three things the desktop shell had that this one did not —
+**反向筛选**, a 复制 that carries a **唯一 ID**, and **指令**'s paste-back — are done
+here, all of it shell-side.
+
+**反向筛选.** `QuireViewModel` gains `orgExcluded: Set<String>` beside `orgTag`, and
+every projection that takes an `exclude` — which has been in `OrgModel` since ADR-0018
+but was always handed `emptySet()` — is now fed it. Each tag chip carries a **⊖** that
+toggles its path in the hidden set, the hidden paths are spelled out under the
+breadcrumb, and the bar's ✕ clears both halves. `OrgModel.tagChips` takes an `isTask`
+flag, and the 任务 page gains the tag row it never had — the tasks' own tags, not the
+notes'.
+
+**复制 carries a 唯一 ID.** `OrgModel.noteCopyText` / `taskCopyText` are the desktop's
+`org_note_copy_text` / `org_task_copy_text`, kept identical in shape, and every copy
+verb goes through them: the selection bar's, 全部's, a single row's, and the tasks'
+three new ones (复制 / 复制全部 / a row's 复制).
+
+**指令.** `orgRunCommands(isTask, json)` is the bridge's `orgCommands` — already
+implemented and tested in `rust/src/org.rs` — reached from a paste dialog behind each
+page's overflow, with the desktop's `NOTE_COMMAND_EXAMPLE` / `TASK_COMMAND_EXAMPLE`
+behind 复制示例.
+
+Why: the M2.75 / M2.9 tails named these as the desktop's and not this shell's, and the
+round trip is the whole reason the `uuid` column exists (core ADR-0002). Without the
+paste door, the 复制 that hands out an id had nothing to answer it, and 反向筛选 was a
+projection the UI could never reach.
+
+Consequences:
+
+- **No core change and no rev bump.** Every piece is a shell-layer projection, a
+  clipboard string, or a bridge call that already existed, so the library this reads is
+  the same one the other shells read.
+- The 复制 format is pinned to the desktop's so **one prompt works against either
+  shell**: `ID: <uuid>` lines, notes joined by a blank line, a task's 备注 after its
+  title. Changing it is changing a prompt, not just a screen.
+- **The notice bar is no longer write-once.** It used to adopt the Rust side's notice
+  behind a one-shot flag, which suppressed a repeated startup line but could swallow
+  指令's own count. It now adopts a line whenever the line *changes*, and 指令 forces
+  its line on every run — two identical batches both get to say what they did.
+- The ⊖ is a drawn circle-and-bar rather than the reference's `⊘`, for the desktop's
+  own reason (no rotated glyph to rely on), and a hidden path's label is struck.
+- **Still not here, and still named**: a persistent 回收站, 笔记历史 / 恢复版本, a note
+  body that renders its markdown, a repeating task that rolls forward, and a board that
+  respects the tag filter (the desktop's board does not either).
+
 ## ADR-0018 · 层级标签, 转为待办 and 多选 — the three the reference app had and this shell did not
 
 Decision: three things the reference app (`aw-android-native`) does, done here.

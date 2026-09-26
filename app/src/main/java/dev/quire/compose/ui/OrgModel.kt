@@ -273,34 +273,38 @@ object OrgModel {
         )
 
     /**
-     * The 笔记 tab's tag row: the direct children of the filter `path` — the top
-     * level when nothing is filtered — each with the number of notes at or under
-     * it, most used first.
+     * A tab's tag row: the direct children of the filter `path` — the top level
+     * when nothing is filtered — each with the number of rows at or under it, most
+     * used first.
      *
      * A tag is a **path** (`项目/工作/ActivityWatch`), and the row walks it the way
      * the reference app's does: 项目 → 工作 → ActivityWatch is three taps, and the
      * filter bar's ↑ is the way back. The count is the *subtree* count rather than
-     * the number of notes carrying the tag literally, because a chip has to say how
-     * many notes tapping it would leave on screen.
+     * the number of rows carrying the tag literally, because a chip has to say how
+     * many rows tapping it would leave on screen.
+     *
+     * `isTask` decides whose tags are folded — the notes' on 收件箱, the tasks' on
+     * 任务. One row that answered about notes while tasks were on screen would be a
+     * filter for rows that are not there (the desktop's `org_tag_rows_of`).
      */
-    fun tagChips(catalog: OrgCatalog, path: String = ""): List<TagChip> =
-        tagCounts(catalog).entries
+    fun tagChips(catalog: OrgCatalog, path: String = "", isTask: Boolean = false): List<TagChip> =
+        tagCounts(if (isTask) catalog.tasks.map { it.tags } else catalog.notes.map { it.tags }).entries
             .filter { (full, _) -> tagParentPath(full).orEmpty() == path }
             .map { TagChip(it.key, it.value) }
             .sortedWith(compareByDescending<TagChip> { it.count }.thenBy { it.name })
 
     /**
-     * Every tag prefix the notes carry, and how many notes sit at or under it.
+     * Every tag prefix the rows carry, and how many rows sit at or under it.
      *
-     * A note counts **once** per prefix however many of its tags pass through it:
-     * two tags under `项目` are still one note under `项目`, and counting it twice
+     * A row counts **once** per prefix however many of its tags pass through it:
+     * two tags under `项目` are still one row under `项目`, and counting it twice
      * would make the chip a lie.
      */
-    private fun tagCounts(catalog: OrgCatalog): LinkedHashMap<String, Int> {
+    private fun tagCounts(source: List<List<String>>): LinkedHashMap<String, Int> {
         val counts = LinkedHashMap<String, Int>()
-        for (note in catalog.notes) {
+        for (tags in source) {
             val prefixes = LinkedHashSet<String>()
-            for (tag in note.tags) {
+            for (tag in tags) {
                 val segments = tagSegments(tag)
                 for (end in 1..segments.size) prefixes += segments.subList(0, end).joinToString("/")
             }
@@ -366,6 +370,45 @@ object OrgModel {
         } else {
             "排除 " + exclude.sorted().joinToString(" ") { tagLabel(it) }
         }
+
+    // ─── 复制 out with a 唯一 ID (SPEC §四十一) ───────────────────────────────
+    //
+    // What 复制 hands an AI: the picked rows, each carrying the id an instruction
+    // can name it by. The shapes are the desktop's own (`org_note_copy_text` /
+    // `org_task_copy_text`), kept identical so one prompt reads either shell.
+
+    /**
+     * The picked notes as clipboard text, in the order they were drawn, a blank
+     * line between. A note's text is its **body**, falling back to its title when
+     * there is no body — the card shows the body, and a title-only note has nothing
+     * but its title.
+     *
+     * **Each note carries its 唯一 ID** on a line of its own, which is what makes
+     * the text an *instruction* rather than a copy: the AI answers with operations
+     * that name the rows, and the name that survives a sync's renumbering is the
+     * uuid. A row an older peer sent without one falls back to `local:<id>`.
+     */
+    fun noteCopyText(catalog: OrgCatalog, ids: List<Long>): String =
+        ids.mapNotNull { id -> catalog.notes.firstOrNull { it.id == id } }
+            .map { note ->
+                val text = note.body.ifBlank { note.title }
+                "$text\nID: ${uid(note.uuid, note.id)}"
+            }
+            .joinToString("\n\n")
+
+    /**
+     * The picked tasks as clipboard text — the tasks' half of 复制, and the same
+     * shape: a title, its 备注, then the 唯一 ID. 无标题 for a row with no title,
+     * because a blank first line would read as an empty entry.
+     */
+    fun taskCopyText(catalog: OrgCatalog, ids: List<Long>): String =
+        ids.mapNotNull { id -> catalog.tasks.firstOrNull { it.id == id } }
+            .map { task ->
+                val title = task.title.ifBlank { "无标题" }
+                val text = if (task.notes.isBlank()) title else "$title\n\n${task.notes}"
+                "$text\n\nID: ${uid(task.uuid, task.id)}"
+            }
+            .joinToString("\n\n")
 
     /**
      * A note's title when it is turned into a task (转为待办): the note's own title if

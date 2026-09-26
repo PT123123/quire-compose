@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased — the AI round trip and the filter's other half
+
+Three things the desktop shell had and this one did not — all shell-side: no
+`quire-core` change and no rev bump (ADR-0019).
+
+### 反向筛选
+
+- The tag filter has **two halves**: the include path (tapping a chip) and the hidden
+  set (each chip's **⊖**). Hiding `项目` hides its subtree and leaves `项目2` alone —
+  the same segment boundary, with the answer turned around.
+- The filter bar spells the hidden paths out under the breadcrumb, and its ✕ clears
+  **both** halves; 清除过滤 clears the needle with them.
+- **任务 has a tag row now.** It was the notes' page only, and the tasks' half folds
+  the *tasks'* own tags — so a row answering about notes while tasks are on screen can
+  no longer happen.
+
+### 复制 carries a 唯一 ID
+
+- Every 复制 — the selection bar's, 全部's, and a single row's — writes each row with
+  `ID: <uuid>` (a note: its body or title, then the id; a task: title, 备注, then the
+  id), or `local:<id>` for a row an older peer sent without a uuid.
+- **任务 gains the copy verb it never had**: 复制 in the selection bar, 复制全部 in the
+  overflow, and 复制 in a row's ⋯.
+
+### 指令
+
+- The overflow's **指令…** opens a paste box: a `{"operations":[…]}` batch applied in
+  order as **one** 撤销 step. 复制示例 puts the desktop's own editable template on the
+  clipboard, so the batch's shape is discoverable without a manual.
+- An action a half cannot take is refused by name and counted (`指令完成：成功 N / 失败
+  M`), and the line is shown even when a second batch repeats the last — the notice bar
+  is no longer write-once.
+
+### Also
+
+- `OrgModelTest` grew six tests: the note and task copy texts with their uuids, the
+  tasks' own tag row, the exclude half and its `项目2` boundary, and the 排除 line.
+- The dead `orgNoteTitle` / `orgNoteBody` / `orgNoteTags` view-model wrappers are gone;
+  a note's write path is `orgNoteContent` — its text and tags in one step — which is
+  what the UI has always used.
+
 ## 0.6.0 — 层级标签, 转为待办, 多选
 
 The rest of what the reference app's 收件箱 and 任务 offer that this shell did not
