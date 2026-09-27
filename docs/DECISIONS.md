@@ -4,6 +4,67 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0022 · The composer inherits the tag filter, and 收件箱 opens it on arrival
+
+Decision: two gaps against the reference app's inbox, both about the tag filter,
+closed the same way the desktop shell closes them (its ADR-0117).
+
+**The composer is seeded, not empty.** `openNoteComposer` stops writing `""` and
+calls `composerSeed()`, which is the reference's own priority order — the draft
+already in hand, else the tag filter as `#<org-tag> ` — and `openTaskComposer` uses
+the same function, so the two ＋ buttons cannot drift. 任务's ➤ also *merges* the
+filter into the row it commits (`taskTags`: the `#tokens` in the line, plus the
+include path if it is not already among them), which is the reference's
+`(tags + listOfNotNull(currentTag)).distinct()`. The merge is what makes the
+pre-fill more than a suggestion: a task added while looking at 工作 stays in 工作
+even if the preset was edited away, and the board column's ＋ gets the same tags.
+Because the field may already hold text, `CaptureOverlay` seeds its
+`TextFieldValue` with `TextRange(vm.orgDraft.length)` — a caret at 0 would put the
+next keystroke in front of the preset and file the row under a token that never
+started with `#` (the pre-existing task pre-fill had exactly that bug).
+
+**打开笔记页时自动弹出输入框** becomes a row in Settings (under 笔记), backed by
+the library's `notes.auto_input` row: `openNotes` opens the capture overlay after
+its reset when `autoInputOnStart` is true, and the switch round-trips through the
+bridge (`setAutoInput` → `Request::SetAutoInput`) so the desktop shell reads the
+same value. Read as **on** when the row is absent — the shipped default, and the
+reason `set_auto_input` is only ever written to turn the behaviour off. 任务 has no
+such setting, because the reference does not give its todo page one.
+
+Context: the user compared both shells against `aw-android-native`'s inbox and
+named exactly these two — "在筛选了标签以后，打开输入框，发现里面没有预填筛选的标签"
+and "当打开这个笔记页面的时候，它默认会弹出输入框准备好输入，而且这个可以在设置中
+关掉". The reference has `showQuickNoteDialog`'s
+`val preset = currentTag?.let { "#$it " } ?: ""` with an in-progress draft winning,
+and `InboxPrefs.autoInputOnStart` read from
+`InboxFragment.onViewCreated`'s `view.post { showQuickNoteDialog() }`. This shell
+already had the *task* half of the pre-fill and neither half of the rest — and the
+note half is what the user was looking at.
+
+Consequences:
+
+- **`openDestination` still closes the composer, and `openNotes` re-opens it.** The
+  auto-open has to run *after* the reset, which is why it lives in `openNotes`
+  rather than in the drawer callback (where `openNotes` would cancel it) or in
+  `openDestination` (where 任务 would get it too).
+- **Only 收件箱 auto-opens.** `openTasks` is untouched: the reference reads the
+  preference only in `InboxFragment`, and inventing it for the todo page would be a
+  behaviour the app being ported does not have.
+- **The draft wins over the filter.** `composerSeed` is the reference's "cached
+  draft > tag preset", and it is what keeps this shell's promise that a sheet
+  dismissed mid-sentence loses nothing (ADR-0015) — a ＋ that overwrote the draft
+  with a preset would eat the sentence.
+- **The setting is the library's, not the device's.** It is a `SettingSet` row like
+  `theme`, sent back in the view as `autoInput`; the desktop shell reads and writes
+  the same `notes.auto_input`. A phone and a desktop on one library therefore agree
+  about it, which is the only reason it is not a `remember` in `Shell`.
+- **The board's ＋ merges too.** `orgQuickAddTo` goes through `taskTags`, so a tag
+  filter keeps applying on the board — where the chip row is hidden but the filter
+  is still what the rows were projected through.
+- **No core change.** The key is a shell-level settings row, spelled the same on
+  both sides with a comment naming the other shell, exactly as `recents` and
+  `theme` already are.
+
 ## ADR-0021 · The palette is ActivityWatch's twelve, chosen by name, and the window is a ramp
 
 Decision: this shell stops having two palettes and starts having a catalog.

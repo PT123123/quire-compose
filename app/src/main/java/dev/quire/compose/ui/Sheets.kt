@@ -240,6 +240,19 @@ fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
             }
 
             HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
+            SheetHeader("笔记")
+            SheetItem(
+                label = "打开笔记页时自动弹出输入框",
+                onClick = { vm.setAutoInput(!view.autoInput) },
+                trailing = {
+                    // The row is the library's (`notes.auto_input`), not the device's,
+                    // so it round-trips through the bridge — the desktop shell keeps
+                    // the same switch on the same row.
+                    Switch(checked = view.autoInput, onCheckedChange = { vm.setAutoInput(it) })
+                },
+            )
+
+            HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
             SheetHeader("当前页面")
             SheetItem(
                 label = "只读",

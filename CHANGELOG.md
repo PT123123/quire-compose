@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased — 筛选预填与 打开笔记页自动弹出输入框
+
+Two alignments against the reference app's inbox, both about the tag filter
+(ADR-0022; the desktop shell has the same pair, its ADR-0117).
+
+### The composer inherits the filter
+
+- **Tapping ＋ on 收件箱 with a tag filter on opens the field with `#当前标签 `
+  already in it** — the reference's own habit, and one 任务's ＋ has had all along.
+  The two buttons now share one `composerSeed`, which is also the reference's
+  priority order: a draft already in hand wins over the preset, so a sheet
+  dismissed mid-sentence still loses nothing.
+- **The pre-filled token is not in the way of the caret any more.** The overlay
+  seeds its `TextFieldValue` with the caret after the text; it started at 0, which
+  would put the first keystroke in front of the preset (so 任务's pre-fill was
+  already writing rows the tag never reached).
+- **➤ merges the filter into the new task**: the `#tokens` in the line plus the
+  include path, deduplicated — `(tags + listOfNotNull(currentTag)).distinct()`,
+  the reference's own line. Editing or deleting the preset therefore no longer
+  means the task leaves the filter it was made in. The board column's ＋ gets the
+  same tags.
+
+### 打开笔记页时自动弹出输入框
+
+- **A new row in Settings, under 笔记**: with it on (the default) arriving at
+  收件箱 — the drawer row, or a cold start that lands there — opens the capture
+  overlay with the caret in it, ready to type. Off means the list opens on its own.
+- It is the **library's** row, not the device's: `notes.auto_input` round-trips
+  through the bridge (`setAutoInput` → `Request::SetAutoInput`) and is read back as
+  `View.autoInput`, so the desktop shell reads the same value out of the same
+  `quire.db`. An absent row means on — the shipped default.
+- 任务 deliberately has no such switch: the reference sets 收件箱's inbox up this
+  way and leaves its todo page alone.
+- New test: `auto_input_defaults_on_and_the_switch_is_the_library_s`.
+
 ## Unreleased — AW's theme catalog
 
 The desktop shell adopted ActivityWatch's theme table and this shell follows, so

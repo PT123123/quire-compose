@@ -135,6 +135,16 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setTheme(theme: String) = act { bridge.setTheme(theme) }
 
+    /** 收件箱's 启动时自动弹出输入框 — the library's row, written through the bridge. */
+    fun setAutoInput(on: Boolean) = act { bridge.setAutoInput(on) }
+
+    /**
+     * 收件箱's 启动时自动弹出输入框, the library's own row: on unless it has been
+     * turned off. Read off the last reply rather than mirrored into a field, because
+     * the view is the one place the value lives — the same rule `theme` keeps.
+     */
+    val autoInputOnStart: Boolean get() = view?.autoInput != false
+
     // ─── blocks ─────────────────────────────────────────────────────────────
 
     /** A keystroke. Deliberately `Reply.Done`: nothing comes back to redraw. */
@@ -299,10 +309,21 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgFocus = null
     }
 
-    /** Go to 收件箱, with nothing selected and nothing filtered. */
-    fun openNotes() = openDestination(ORG_TAB_NOTES)
+    /**
+     * Go to 收件箱, with nothing selected and nothing filtered.
+     *
+     * Arriving here is the one moment the reference app opens its input box by
+     * itself, gated on the library's 启动时自动弹出输入框 row (`auto_input`, on
+     * unless it has been turned off) — so the capture overlay is opened *after* the
+     * reset, which would otherwise close it again. The ＋ and this call are the same
+     * `openNoteComposer`, so the tag pre-fill below applies either way.
+     */
+    fun openNotes() {
+        openDestination(ORG_TAB_NOTES)
+        if (autoInputOnStart) openNoteComposer()
+    }
 
-    /** Go to 任务, on the same terms. */
+    /** Go to 任务, on the same terms. No such setting: the reference has none there. */
     fun openTasks() = openDestination(ORG_TAB_TASKS)
 
     private fun openDestination(tab: Int) {
@@ -520,10 +541,30 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── the capture sheet ──────────────────────────────────────────────────
 
-    /** The round ＋ on 收件箱: a sheet with an empty field. */
+    /**
+     * The round ＋ on 收件箱. A tag filter is pre-filled into the field, which is the
+     * reference app's own habit and the same one 任务's ＋ keeps: a note written while
+     * looking at `#工作` starts with `#工作` in it, so the row lands in the filter it
+     * was made in. The preset is a `#token` rather than a tag stapled onto the note,
+     * so ➤ reads it back through the one token rule the user's own typing goes
+     * through — and the caret starts after it (see `CaptureOverlay`).
+     */
     fun openNoteComposer() {
         orgCompose = Compose.NewNote
-        orgDraft = ""
+        orgDraft = composerSeed()
+    }
+
+    /**
+     * What a fresh composer's field starts with: the draft already in hand, and
+     * otherwise the tag filter as a `#token ` (see [openNoteComposer]). The order is
+     * the reference app's — "cached draft > tag preset" — because a sheet dismissed
+     * mid-sentence must not eat the sentence, while an empty one has nothing better
+     * to show than the filter it was opened under.
+     */
+    private fun composerSeed(): String = when {
+        orgDraft.isNotEmpty() -> orgDraft
+        orgTag.isNotEmpty() -> "#$orgTag "
+        else -> ""
     }
 
     /**
@@ -549,7 +590,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun openTaskComposer() {
         orgCompose = Compose.NewTask
-        orgDraft = if (orgTag.isNotEmpty()) "#$orgTag " else ""
+        orgDraft = composerSeed()
     }
 
     fun orgCloseComposer() {
@@ -624,9 +665,22 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         bridge.orgQuickAdd(
             list = orgList,
             title = line,
-            tags = MarkdownText.tagString(line),
+            tags = taskTags(line),
             due = if (orgView == ORG_VIEW_TODAY) OrgModel.Dates.now().today else null,
         )
+    }
+
+    /**
+     * A new task's tags: the `#tokens` in what was typed **plus** the tag filter it
+     * was made under. The merge is the reference app's own — `(tags +
+     * listOfNotNull(currentTag)).distinct()` — and it is what makes the pre-filled
+     * preset more than a suggestion: a task added while looking at 工作 stays in 工作
+     * even if the preset was edited or deleted away.
+     */
+    private fun taskTags(line: String): String {
+        val typed = MarkdownText.tagTokens(line)
+        val tags = if (orgTag.isEmpty() || orgTag in typed) typed else typed + orgTag
+        return tags.joinToString(", ")
     }
 
     /**
@@ -634,7 +688,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
      * whatever the chips are on, because the board shows every list at once.
      */
     fun orgQuickAddTo(list: Long, title: String) = act {
-        bridge.orgQuickAdd(list, title, MarkdownText.tagString(title), null)
+        bridge.orgQuickAdd(list, title, taskTags(title), null)
     }
 
     fun orgToggleNotePinned(note: Long, pinned: Boolean) = act { bridge.orgNotePinned(note, pinned) }

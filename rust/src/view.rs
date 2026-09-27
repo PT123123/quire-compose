@@ -92,6 +92,11 @@ pub struct View {
     pub icon: String,
     pub locked: bool,
     pub theme: String,
+    /// 收件箱's 启动时自动弹出输入框 — the shared `notes.auto_input` settings row,
+    /// sent so the shell can decide whether arriving at 笔记 opens the capture
+    /// overlay. Like `theme`, the value belongs to the library rather than to the
+    /// device, so it is read back here instead of kept in Kotlin.
+    pub auto_input: bool,
     pub recents: Vec<u64>,
     pub favorites: Vec<u64>,
     /// Whether an undo/redo step is believed to exist. Approximate on purpose:

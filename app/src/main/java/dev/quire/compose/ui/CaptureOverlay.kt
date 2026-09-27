@@ -84,7 +84,12 @@ fun CaptureOverlay(vm: QuireViewModel, onDismiss: () -> Unit) {
     val focusRequester = remember { FocusRequester() }
     val catalog = vm.view?.org ?: OrgCatalog.Empty
 
-    var field by remember(target) { mutableStateOf(TextFieldValue(vm.orgDraft)) }
+    // The caret starts *after* the seed, because a fresh composer may already hold
+    // the tag filter's `#token` — a caret at 0 would put the next keystroke in front
+    // of it and file the row under a token that never started with `#`.
+    var field by remember(target) {
+        mutableStateOf(TextFieldValue(vm.orgDraft, TextRange(vm.orgDraft.length)))
+    }
     // The draft is the view model's, so a dismissal and a return finds it; every
     // keystroke updates it, which is the same "write early" rule the debounced
     // fields keep.

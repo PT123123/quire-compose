@@ -240,6 +240,29 @@ fn the_pre_catalog_theme_spelling_still_resolves() {
 }
 
 #[test]
+fn auto_input_defaults_on_and_the_switch_is_the_library_s() {
+    // 启动时自动弹出输入框 is on out of the box: a library that has never seen
+    // the switch must answer `true`, not the false a missing row would suggest.
+    let mut h = Harness::new("auto-input");
+    assert_eq!(h.view()["autoInput"], Value::Bool(true));
+
+    // Turning it off is a write, and the row survives a reopen — it lives in the
+    // same `notes.auto_input` row the desktop shell reads.
+    let view = h.ok(r#"{"op":"setAutoInput","on":false}"#);
+    assert_eq!(view["autoInput"], Value::Bool(false));
+    h.ok(r#"{"op":"flush"}"#);
+    h.reopen();
+    assert_eq!(h.view()["autoInput"], Value::Bool(false));
+
+    // …and back on.
+    let view = h.ok(r#"{"op":"setAutoInput","on":true}"#);
+    assert_eq!(view["autoInput"], Value::Bool(true));
+    h.ok(r#"{"op":"flush"}"#);
+    h.reopen();
+    assert_eq!(h.view()["autoInput"], Value::Bool(true));
+}
+
+#[test]
 fn a_rename_sticks_and_a_blank_one_becomes_untitled() {
     let mut h = Harness::new("rename");
     let page = h.ok(r#"{"op":"createPage","title":"before"}"#)["activePage"]

@@ -71,6 +71,12 @@ data class View(
     val icon: String,
     val locked: Boolean,
     val theme: String,
+    /**
+     * 收件箱's 启动时自动弹出输入框 — the library's `notes.auto_input` row, sent by
+     * the bridge so arriving at 笔记 knows whether to open the capture overlay. The
+     * desktop shell reads the same row, so the two shells cannot disagree.
+     */
+    val autoInput: Boolean,
     val recents: List<Long>,
     val favorites: List<Long>,
     val canUndo: Boolean,
@@ -279,6 +285,7 @@ private fun parseView(json: JSONObject): View = View(
     icon = json.optString("icon"),
     locked = json.optBoolean("locked"),
     theme = json.optString("theme", "midnight"),
+    autoInput = json.optBoolean("autoInput", true),
     recents = json.getJSONArray("recents").longs(),
     favorites = json.getJSONArray("favorites").longs(),
     canUndo = json.optBoolean("canUndo"),

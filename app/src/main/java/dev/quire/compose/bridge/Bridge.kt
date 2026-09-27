@@ -51,6 +51,13 @@ class Bridge(private val handle: Long) {
     fun setTheme(theme: String): Reply = send("setTheme", "theme" to theme)
 
     /**
+     * 收件箱's 启动时自动弹出输入框. The row is the library's (`notes.auto_input`),
+     * not the device's — the desktop shell reads the same one — so this is a round
+     * trip like [setTheme] rather than a local preference.
+     */
+    fun setAutoInput(on: Boolean): Reply = send("setAutoInput", "on" to on)
+
+    /**
      * A keystroke. Answers [Reply.Done]: echoing a page's worth of rows back on
      * every character is the cost this rule exists to avoid.
      */

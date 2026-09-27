@@ -67,6 +67,16 @@ const DEFAULT_THEME: &str = "midnight";
 /// offers the same recents.
 const META_RECENTS: &str = "recents";
 
+/// The settings row behind 收件箱's 启动时自动弹出输入框: whether *arriving* at the
+/// notes destination opens the capture overlay by itself.
+///
+/// The desktop shell writes and reads the same `notes.auto_input` row, so the
+/// preference travels with the library rather than with the device — which is the
+/// only reason the row is a settings key at all instead of a flat in the shell.
+/// **Absent means on**: the shipped default, and the reason the row is only ever
+/// written to turn the behaviour *off*.
+const KEY_AUTO_INPUT: &str = "notes.auto_input";
+
 /// The default page title, in the UI's language. Both existing shells land on
 /// the same string, so a page created on a phone reads the same on a desktop.
 const UNTITLED: &str = "无标题";
@@ -112,6 +122,10 @@ pub enum Request {
     },
     SetTheme {
         theme: String,
+    },
+    /// 收件箱's 启动时自动弹出输入框 (see [`KEY_AUTO_INPUT`]).
+    SetAutoInput {
+        on: bool,
     },
     SetBlockText {
         block: u64,
@@ -581,6 +595,7 @@ impl Session {
             icon: active.and_then(|p| self.ws.get(p)).map(|r| r.icon.clone()).unwrap_or_default(),
             locked: active.map(|p| self.ws.is_locked(p)).unwrap_or(false),
             theme: self.theme.clone(),
+            auto_input: self.auto_input(),
             recents: self.recents.iter().map(|p| p.0).collect(),
             favorites: self.ws.favorites().into_iter().map(|p| p.0).collect(),
             can_undo: self.can_undo,
@@ -623,6 +638,7 @@ impl Session {
             Request::ToggleExpanded { page } => self.toggle_expanded(PageId(page)),
             Request::SetPageLocked { page, locked } => self.set_locked(PageId(page), locked),
             Request::SetTheme { theme } => self.set_theme(&theme),
+            Request::SetAutoInput { on } => self.set_auto_input(on),
             Request::SetBlockText { block, text } => {
                 self.block_command(block, |id| Command::ReplaceText { id, text: text.clone() }, true)
             }
@@ -1083,6 +1099,28 @@ impl Session {
         self.record(vec![Change::SettingSet {
             key: Settings::KEY_THEME.to_string(),
             value: theme.to_string(),
+        }]);
+        Ok(Outcome::Full)
+    }
+
+    /// Whether 收件箱 opens its input box on arrival — the desktop's
+    /// `setting_flag_or("notes.auto_input", true)` read off the same row.
+    fn auto_input(&self) -> bool {
+        self.settings
+            .get(KEY_AUTO_INPUT)
+            .map(|value| value == "1")
+            .unwrap_or(true)
+    }
+
+    /// Persist 收件箱's 启动时自动弹出输入框, so the choice is the library's and
+    /// the other shell sees it. Written as "1"/"0" like every other flag row, and
+    /// only written at all once someone has touched the switch.
+    fn set_auto_input(&mut self, on: bool) -> Result<Outcome, String> {
+        let value = if on { "1" } else { "0" };
+        self.settings.set(KEY_AUTO_INPUT, value);
+        self.record(vec![Change::SettingSet {
+            key: KEY_AUTO_INPUT.to_string(),
+            value: value.to_string(),
         }]);
         Ok(Outcome::Full)
     }
