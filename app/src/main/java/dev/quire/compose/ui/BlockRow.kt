@@ -75,6 +75,7 @@ fun BlockRowView(
     onToggleFold: () -> Unit,
     onOpenMenu: () -> Unit,
     onOpenPage: (Long) -> Unit,
+    onOpenUrl: (String) -> Unit,
 ) {
     val colors = LocalQuireColors.current
     val focusRequester = remember { FocusRequester() }
@@ -123,6 +124,7 @@ fun BlockRowView(
                 row = row,
                 modifier = Modifier.weight(1f),
                 onOpenPage = onOpenPage,
+                onOpenUrl = onOpenUrl,
                 onOpenMenu = onOpenMenu,
             )
             return@Row
@@ -249,10 +251,12 @@ private fun Gutter(
  * Rows this slice cannot edit yet — a table, a database, a picture — shown as
  * what they are rather than as an empty line.
  *
- * A `page` block is the exception: it is a door, so it opens the page it points
- * at. Everything else says its kind in the UI's language and leaves the content
- * to the shell that can draw it; showing the block's own text where there is one
- * (a formula's LaTeX source, a card's address) beats hiding it behind the label.
+ * Two of them are doors. A `page` block opens the page it points at; an `embed`
+ * card opens its address outside the app, which is exactly what the desktop's
+ * card does and the only action an embed has (ADR-0023). Everything else says
+ * its kind in the UI's language and leaves the content to the shell that can
+ * draw it; showing the block's own text where there is one (a formula's LaTeX
+ * source, a card's address) beats hiding it behind the label.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -260,12 +264,15 @@ private fun PlaceholderBody(
     row: BlockRow,
     modifier: Modifier,
     onOpenPage: (Long) -> Unit,
+    onOpenUrl: (String) -> Unit,
     onOpenMenu: () -> Unit,
 ) {
     val colors = LocalQuireColors.current
     val target = row.pageRef ?: row.dbRef ?: row.attachment
     val label = if (target != null) "${BlockKinds.label(row.kind)} #$target" else BlockKinds.label(row.kind)
-    val opens = row.pageRef != null
+    val opensPage = row.pageRef != null
+    val opensUrl = row.kind == "embed" && row.text.isNotBlank()
+    val opens = opensPage || opensUrl
 
     Column(
         modifier = modifier
@@ -275,7 +282,12 @@ private fun PlaceholderBody(
             // A long press is free here — there is no text field to steal it —
             // so a placeholder row can offer its menu the way touch expects.
             .combinedClickable(
-                onClick = { row.pageRef?.let(onOpenPage) },
+                onClick = {
+                    when {
+                        opensPage -> row.pageRef?.let(onOpenPage)
+                        opensUrl -> onOpenUrl(row.text)
+                    }
+                },
                 onLongClick = onOpenMenu,
             )
             .padding(horizontal = 10.dp, vertical = 8.dp),

@@ -81,6 +81,7 @@ fun EditorScreen(
                 onToggleFold = { vm.toggleFold(block.id) },
                 onOpenMenu = { onBlockMenu(block.id) },
                 onOpenPage = vm::openPage,
+                onOpenUrl = vm::openUrl,
             )
         }
         item(key = "append") {

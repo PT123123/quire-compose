@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — 在系统浏览器中打开地址
+
+The shell gains an OS-open path (ADR-0023), the Compose half of the desktop's
+`open_link`.
+
+### 链接卡片可以打开了
+
+- **Tapping an embed card opens its address outside the app.** A 链接卡片 row is a
+  placeholder with no text field, so the tap is free: it hands the address to an
+  `Intent.ACTION_VIEW`, which is the browser's or the mail app's to render —
+  exactly what the desktop shell's card does, and the only action an embed has.
+- **The address passes two gates first.** A bare domain (`example.com/a`) gets an
+  `https://` scheme, and only `http` / `https` / `mailto` addresses reach the
+  system — the same allow-list `quire-core::embed::is_openable` keeps, so a
+  `file:` or `javascript:` address a document carries cannot act on the device.
+- **Not yet: a link inside a paragraph.** Compose 1.6 has no link annotation for a
+  text field, and intercepting taps there would fight the caret and the IME, so
+  inline link marks stay styled but inert for now (ADR-0023).
+- New test: `LinksTest` pins the scheme rule and the allow-list against the same
+  cases the core's own `embed` test uses.
+
 ## Unreleased — 筛选预填与 打开笔记页自动弹出输入框
 
 Two alignments against the reference app's inbox, both about the tag filter

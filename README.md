@@ -100,7 +100,8 @@ Two slices, end to end: **the document** and **the organizer**.
   quotes, code blocks, callouts, toggles and dividers — editing text, Enter for
   the next block, the ⋮ handle for the block menu (kind, move, indent, delete),
   undo and redo, and inline marks (bold, italic, strike, code, links) painted
-  from the core's own byte offsets.
+  from the core's own byte offsets. A 链接卡片 is a door: tapping it opens its
+  address in the system browser (ADR-0023).
 
 **SPEC §四十一's 收件箱 and 任务**, reached from the drawer as two separate pages.
 **收件箱 is home**: the app opens there, and the back gesture returns there from
@@ -179,7 +180,10 @@ Said plainly, because a shell that pretends is worse than one that is small:
 - **Tables, columns, formulas, tables of contents, link cards, synced mirrors
   and databases** render as a labelled placeholder row that can be moved or
   deleted but not edited. The desktop's `DatabaseView` is the largest single
-  component it has, and it has not been ported.
+  component it has, and it has not been ported. A 链接卡片 is the one placeholder
+  that is also a door — tapping it opens its address in the system browser
+  (ADR-0023) — and a link inside a paragraph is still inert (Compose 1.6 has no
+  link annotation for a text field).
 - **Images and files** show their attachment id, not the picture.
 - **Search** is the organizer's own two needles and nothing else — no page
   palette and no in-page find bar.
@@ -223,6 +227,10 @@ Said plainly, because a shell that pretends is worse than one that is small:
   heading cycle that eats a list marker, a bold toggle that doubles a mark, and a
   `#`-scan that calls "issue #3" a tag are all *nearly* right in a way nobody
   notices until the notes are full of stray asterisks.
+- A fourth is the two address rules between a stored URL and the system
+  (`LinksTest.kt`, ADR-0023): `withScheme` and the http/https/mailto allow-list,
+  mirrored from `quire-core::embed`. A scheme list that is nearly right is exactly
+  the kind of thing that is invisible until a document carries the wrong address.
 - `just android-lib` builds only the `.so`; the Rust side's loop is `cargo test`
   in `rust/`.
 - Version lives in one place, `gradle.properties`' `quire.version`;

@@ -4,6 +4,54 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0023 · The OS-open path: an address leaves through ACTION_VIEW, behind the core's allow-list
+
+Decision: the shell gains `QuireViewModel.openUrl`, the Compose half of the
+desktop's `open_link`. A `quire://page/<id>` address is the document's own and is
+followed in-app; anything else is handed to an `Intent.ACTION_VIEW`, but only
+after two string rules the desktop already applies:
+
+- `withScheme` gives a bare domain (`example.com/a`) the `https://` scheme the
+  link dialog would have given it, so it opens the page rather than failing as a
+  relative path.
+- `isOpenable` lets through only `http` / `https` / `mailto` — the same three
+  schemes `quire-core::embed::is_openable` keeps — so a `file:` or `javascript:`
+  address a document carries can never reach an Intent that would *act* on it.
+
+Its first caller is the **embed card**: a placeholder `embed` row now opens its
+address on tap, which is the direct analogue of the desktop card's one button.
+There is no HTML here either — the app stores no HTML and draws none (desktop
+ADR-0119), so a URL is the browser's or the mail app's to render.
+
+Context: the desktop shell has had `open_link` for a while (the `is_openable`
+gate, `ShellExecuteW`, and the embed card's button), and this shell had **no**
+external-open path at all — a grep for `Intent` / `ACTION_VIEW` / browser across
+the Kotlin and Rust sources came back empty. The user asked to align the two:
+*"compose 端根本没有 OS 打开路径…要对齐得先给它加"*.
+
+Consequences:
+
+- **The allow-list is mirrored in Kotlin rather than asked of the bridge.**
+  `is_openable` is a pure three-line predicate with no state behind it, so a JNI
+  round trip to evaluate it would be a per-tap call for nothing. The risk is the
+  two copies drifting; `LinksTest` pins the Kotlin one against the same cases
+  `quire-core::embed`'s own test uses.
+- **`FLAG_ACTIVITY_NEW_TASK` is set**, because the Intent is launched from the
+  Application context rather than an Activity. A device with no handler for the
+  address lands in the same `error` bar every bridge failure uses, with the
+  address in the line — never a silent no-op.
+- **Inline link marks are not tappable yet, and that is deliberate.** Compose
+  1.6.8 (this shell's BOM) has no `LinkAnnotation` for a text field, so a link
+  inside a paragraph could only be opened by intercepting taps on the field —
+  which competes with the caret and the IME, and this repo's rule is that a
+  control which competes with a platform gesture loses (see `BlockRowView`'s own
+  note on the handle). The embed card, which is not a text field, is where the
+  path is nevertheless real. Revisit on a Compose upgrade that brings field-link
+  support.
+- **Only `embed` and the in-app `page` are doors.** Images and files show an
+  attachment id and open nothing here — neither a URL nor a content URI this
+  slice knows how to serve.
+
 ## ADR-0022 · The composer inherits the tag filter, and 收件箱 opens it on arrival
 
 Decision: two gaps against the reference app's inbox, both about the tag filter,

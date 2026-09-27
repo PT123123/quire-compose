@@ -1,6 +1,8 @@
 package dev.quire.compose
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -173,6 +175,37 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     fun undo() = act { bridge.undo() }
 
     fun redo() = act { bridge.redo() }
+
+    // ─── links ──────────────────────────────────────────────────────────────
+    //
+    // The shell's half of the desktop's `open_link` (ADR-0023). An address the
+    // document carries is opened by the *system*, never by this app — there is no
+    // HTML here either (ADR-0023 records the decision): the app stores no HTML and
+    // draws none, so a URL is the browser's or the mail app's to render.
+
+    /**
+     * Open [url] outside the app. A `quire://page/<id>` address is the document's
+     * own navigation and is followed in-app; anything else is handed to an
+     * `ACTION_VIEW` Intent, but only after [withScheme] gives a bare domain the
+     * scheme the link dialog would have given it and [isOpenable] lets it through.
+     *
+     * The allow-list is the point: a link's target arrives from a file — an
+     * import, a paste, a LAN pull — and an Intent will act on a `file:` or a
+     * `javascript:` address as readily as it opens a page, so only the three
+     * schemes `quire-core::embed::is_openable` keeps ever reach the system.
+     */
+    fun openUrl(url: String) {
+        if (url.startsWith("quire://page/")) {
+            url.removePrefix("quire://page/").toLongOrNull()?.let { openPage(it) }
+            return
+        }
+        val address = withScheme(url)
+        if (!isOpenable(address)) return
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(address))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { getApplication<Application>().startActivity(intent) }
+            .onFailure { error = "没有程序可以打开 $address" }
+    }
 
     // ─── SPEC §四十一: the organizer's own view state ───────────────────────
     //
@@ -1001,6 +1034,29 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         /** How long a deleted row stays recoverable before the real command goes out. */
         const val DELETE_UNDO_MS = 3_000L
     }
+}
+
+/**
+ * The address as the system should be asked to open it: a bare domain gets the
+ * scheme the link dialog would have given it, so "example.com/a" opens the page
+ * rather than failing as a relative path. A trimmed mirror of
+ * `quire-core::embed::with_scheme` — the same rule the desktop's embed card
+ * applies before it hands an address out (ADR-0023).
+ */
+internal fun withScheme(url: String): String {
+    val trimmed = url.trim()
+    if (trimmed.isEmpty() || trimmed.contains("://") || trimmed.startsWith("mailto:")) return trimmed
+    return "https://$trimmed"
+}
+
+/**
+ * The only addresses this shell will hand to the system: the three schemes
+ * `quire-core::embed::is_openable` allows, mirrored. Case-insensitive like the
+ * core's own test, so `HTTP://` is still an address a browser understands.
+ */
+internal fun isOpenable(url: String): Boolean {
+    val t = url.trim().lowercase()
+    return t.startsWith("http://") || t.startsWith("https://") || t.startsWith("mailto:")
 }
 
 /** The short stable string `quire-core` stores a paragraph as. */
