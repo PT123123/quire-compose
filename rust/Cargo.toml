@@ -20,11 +20,11 @@ crate-type = ["cdylib", "rlib"]
 # The same pinned rev both existing shells carry (ADR-0094) — a rev, not a tag,
 # because the core repo publishes neither tags nor releases yet.
 #
-# This rev carries SPEC §四十一's 唯一 ID (`notes.uuid` / `tasks.uuid`, core
-# ADR-0002) on top of the organizer's 引用 (`notes.ref_note`, core ADR-0001). Bump it
-# only once that commit is on `origin`: a shell cannot build against an unpublished
+# This rev carries SPEC §四十一's 回收站 (core ADR-0003) on top of the 唯一 ID (core
+# ADR-0002) and the organizer's 引用 (`notes.ref_note`, core ADR-0001). Bump it only
+# once that commit is on `origin`: a shell cannot build against an unpublished
 # commit, so the core lands and is pushed first and the pin follows.
-quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "4899857f0e95a6784ad2a2657eb9cf64efdd612f" }
+quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "fbfdaca7273021f3d0171e9d88df7ff7404b4f95" }
 jni = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

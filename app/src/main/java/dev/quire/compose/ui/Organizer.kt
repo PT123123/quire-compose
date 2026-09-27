@@ -224,7 +224,10 @@ fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
         return
     }
     OrgBar(
-        title = "收件箱",
+        // The bin is the same page turned over, so the title follows the flag
+        // rather than the destination: "收件箱" over a list of deleted notes would
+        // be the window lying about itself.
+        title = if (vm.orgBin) "回收站" else "收件箱",
         canUndo = vm.view?.orgCanUndo == true,
         canRedo = vm.view?.orgCanRedo == true,
         onOpenDrawer = onOpenDrawer,
@@ -312,7 +315,8 @@ fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
         return
     }
     OrgBar(
-        title = "任务",
+        // See [NotesBar]: the bin is the page turned over, and the title says so.
+        title = if (vm.orgBin) "回收站" else "任务",
         canUndo = vm.view?.orgCanUndo == true,
         canRedo = vm.view?.orgCanRedo == true,
         onOpenDrawer = onOpenDrawer,
@@ -489,9 +493,17 @@ fun NotesPage(vm: QuireViewModel) {
     // still in the catalog — the command has not been sent — so the projection is
     // filtered, which is what makes the vanish instant and the undo free.
     val hidden = vm.pendingDelete?.takeIf { !it.isTask }?.ids ?: emptySet()
-    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgExcluded, vm.orgNoteSort, hidden) {
-        OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, selected = -1, exclude = vm.orgExcluded)
-            .filter { it.id !in hidden }
+    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgExcluded, vm.orgNoteSort, hidden, vm.orgBin) {
+        if (vm.orgBin) {
+            // 回收站 (core ADR-0003): the other half of the same catalog. The
+            // search box applies to it and the tag row does not — the tag row's
+            // counts are the live notes', so a filter over them would narrow by a
+            // number drawn from somewhere else.
+            OrgModel.binNotes(catalog, vm.orgQuery)
+        } else {
+            OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, selected = -1, exclude = vm.orgExcluded)
+                .filter { it.id !in hidden }
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -504,21 +516,26 @@ fun NotesPage(vm: QuireViewModel) {
                     onClose = vm::closeOrgSearch,
                 )
             }
-            OrgTagChips(
-                catalog = catalog,
-                selected = vm.orgTag,
-                excluded = vm.orgExcluded,
-                isTask = false,
-                allLabel = "全部笔记",
-                onPick = vm::orgPickTag,
-                onExclude = vm::orgToggleTagExcluded,
-            )
-            TagFilterBar(
-                path = vm.orgTag,
-                excluded = vm.orgExcluded,
-                onUp = vm::orgTagUp,
-                onClear = vm::orgClearFilters,
-            )
+            // The tag row is a filter over the *live* notes and the bin is neither:
+            // its counts would be drawn from a collection the list behind it is not
+            // showing, so it is not drawn while the bin is open.
+            if (!vm.orgBin) {
+                OrgTagChips(
+                    catalog = catalog,
+                    selected = vm.orgTag,
+                    excluded = vm.orgExcluded,
+                    isTask = false,
+                    allLabel = "全部笔记",
+                    onPick = vm::orgPickTag,
+                    onExclude = vm::orgToggleTagExcluded,
+                )
+                TagFilterBar(
+                    path = vm.orgTag,
+                    excluded = vm.orgExcluded,
+                    onUp = vm::orgTagUp,
+                    onClear = vm::orgClearFilters,
+                )
+            }
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -541,20 +558,28 @@ fun NotesPage(vm: QuireViewModel) {
                         selecting = vm.orgSelecting,
                         selected = row.id in vm.orgSelection,
                         onSelect = { vm.orgToggleSelected(row.id) },
-                        onLongSelect = { vm.orgStartSelecting(row.id) },
+                        // 多选 is a set of rows on a list, and the bin is not one:
+                        // its two verbs are on each card's own ⋯.
+                        onLongSelect = if (vm.orgBin) null else { { vm.orgStartSelecting(row.id) } },
                     )
                 }
                 if (rows.isEmpty()) {
                     item(key = "empty") {
                         OrgEmpty(
-                            text = if (vm.orgQuery.isNotEmpty() || vm.orgTag.isNotEmpty() ||
+                            text = if (vm.orgBin) {
+                                if (vm.orgQuery.isNotEmpty()) "没有匹配的笔记" else "回收站是空的"
+                            } else if (vm.orgQuery.isNotEmpty() || vm.orgTag.isNotEmpty() ||
                                 vm.orgExcluded.isNotEmpty()
                             ) {
                                 "没有匹配的笔记"
                             } else {
                                 "还没有笔记"
                             },
-                            hint = "点右下角 ＋ 新建一条",
+                            hint = if (vm.orgBin) {
+                                "删除的笔记会先放到这里"
+                            } else {
+                                "点右下角 ＋ 新建一条"
+                            },
                         )
                     }
                 }
@@ -720,20 +745,27 @@ fun TasksPage(vm: QuireViewModel) {
 
     val rows = remember(
         catalog, vm.orgView, vm.orgList, vm.orgQuery, vm.orgTaskSort, vm.orgShowDone, vm.orgTaskSel,
-        vm.orgTag, vm.orgExcluded, hidden,
+        vm.orgTag, vm.orgExcluded, hidden, vm.orgBin, dates,
     ) {
-        OrgModel.tasks(
-            catalog = catalog,
-            view = vm.orgView,
-            list = vm.orgList,
-            query = vm.orgQuery,
-            sort = vm.orgTaskSort,
-            selected = vm.orgTaskSel,
-            showDone = vm.orgShowDone,
-            dates = dates,
-            tag = vm.orgTag,
-            exclude = vm.orgExcluded,
-        ).filter { it.id !in hidden }
+        if (vm.orgBin) {
+            // 回收站 (core ADR-0003): the tasks' half of the bin. The needle
+            // applies; the smart views, the lists and the tag filter do not, because
+            // all four are questions about a *list*.
+            OrgModel.binTasks(catalog, dates, vm.orgQuery, vm.orgTaskSel)
+        } else {
+            OrgModel.tasks(
+                catalog = catalog,
+                view = vm.orgView,
+                list = vm.orgList,
+                query = vm.orgQuery,
+                sort = vm.orgTaskSort,
+                selected = vm.orgTaskSel,
+                showDone = vm.orgShowDone,
+                dates = dates,
+                tag = vm.orgTag,
+                exclude = vm.orgExcluded,
+            ).filter { it.id !in hidden }
+        }
     }
     val (done, total) = remember(catalog) { OrgModel.progress(catalog) }
     val board = vm.orgMode == 1
@@ -748,31 +780,34 @@ fun TasksPage(vm: QuireViewModel) {
                     onClose = vm::closeOrgSearch,
                 )
             }
-            SmartChips(catalog = catalog, dates = dates, vm = vm)
-            ListChips(catalog = catalog, vm = vm)
-            // The tasks' own tag row: the same question the notes' page asks, of the
-            // other list, with the same include / exclude halves. It is not drawn on
-            // the board, which files by list and has no tag column (the desktop's
-            // board ignores the tag filter for the same reason).
-            if (!board) {
-                OrgTagChips(
-                    catalog = catalog,
-                    selected = vm.orgTag,
-                    excluded = vm.orgExcluded,
-                    isTask = true,
-                    allLabel = null,
-                    onPick = vm::orgPickTag,
-                    onExclude = vm::orgToggleTagExcluded,
-                )
-                TagFilterBar(
-                    path = vm.orgTag,
-                    excluded = vm.orgExcluded,
-                    onUp = vm::orgTagUp,
-                    onClear = vm::orgClearFilters,
-                )
+            // The smart views, the lists and the tag row are all questions about a
+            // *list*, and a bin is not one: they are not drawn while it is open.
+            if (!vm.orgBin) {
+                SmartChips(catalog = catalog, dates = dates, vm = vm)
+                ListChips(catalog = catalog, vm = vm)
+                // The tasks' own tag row: the same question the notes' page asks, of
+                // the other list, with the same include / exclude halves. It is not
+                // drawn on the board either, which files by list and has no tag column.
+                if (!board) {
+                    OrgTagChips(
+                        catalog = catalog,
+                        selected = vm.orgTag,
+                        excluded = vm.orgExcluded,
+                        isTask = true,
+                        allLabel = null,
+                        onPick = vm::orgPickTag,
+                        onExclude = vm::orgToggleTagExcluded,
+                    )
+                    TagFilterBar(
+                        path = vm.orgTag,
+                        excluded = vm.orgExcluded,
+                        onUp = vm::orgTagUp,
+                        onClear = vm::orgClearFilters,
+                    )
+                }
             }
 
-            if (board) {
+            if (board && !vm.orgBin) {
                 BoardPane(catalog = catalog, dates = dates, vm = vm, hidden = hidden)
             } else {
                 LazyColumn(
@@ -790,21 +825,24 @@ fun TasksPage(vm: QuireViewModel) {
                             selected = row.id in vm.orgSelection,
                             onSelect = { vm.orgToggleSelected(row.id) },
                             // The board is a "what is left" view and has no room for a
-                            // selection bar; 多选 is the list's.
-                            onLongSelect = if (board) null else { { vm.orgStartSelecting(row.id) } },
+                            // selection bar; 多选 is the list's — and the bin's rows
+                            // carry their own two verbs instead.
+                            onLongSelect = if (board || vm.orgBin) null else { { vm.orgStartSelecting(row.id) } },
                         )
                     }
                     if (rows.isEmpty()) {
                         item(key = "empty") {
                             OrgEmpty(
-                                text = if (vm.orgQuery.isNotEmpty() || vm.orgTag.isNotEmpty() ||
+                                text = if (vm.orgBin) {
+                                    if (vm.orgQuery.isNotEmpty()) "没有匹配的任务" else "回收站是空的"
+                                } else if (vm.orgQuery.isNotEmpty() || vm.orgTag.isNotEmpty() ||
                                     vm.orgExcluded.isNotEmpty()
                                 ) {
                                     "没有匹配的任务"
                                 } else {
                                     "暂无任务"
                                 },
-                                hint = "点右下角 ＋ 添加任务",
+                                hint = if (vm.orgBin) "删除的任务会先放到这里" else "点右下角 ＋ 添加任务",
                             )
                         }
                     }
@@ -1491,22 +1529,36 @@ private fun OrgNotesMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit, onComma
         contentColor = colors.textPrimary,
     ) {
         Column(modifier = Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
-            OrgSheetItem("多选") {
+            if (vm.orgBin) {
+                // The bin's own verb, and nothing else: 多选 is a set of rows on a
+                // list, 复制 hands rows to an AI and 指令 edits them — none of the
+                // three is a question about a bin.
+                OrgSheetItem("清空回收站", danger = true) {
+                    onDismiss()
+                    vm.orgEmptyBin()
+                }
+            } else {
+                OrgSheetItem("多选") {
+                    onDismiss()
+                    vm.orgBeginSelecting()
+                }
+                OrgSheetItem("清除过滤") {
+                    vm.orgClearFilters()
+                    vm.orgSetQuery("")
+                }
+                OrgSheetItem("复制全部") {
+                    // Every note the filter is showing, each with its 唯一 ID on a line
+                    // of its own — the text 指令's batch names the rows by.
+                    val shown = OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1, vm.orgExcluded)
+                    clipboard.setText(AnnotatedString(OrgModel.noteCopyText(catalog, shown.map { it.id })))
+                    onDismiss()
+                }
+                OrgSheetItem("指令…") { onCommands() }
+            }
+            OrgSheetItem(if (vm.orgBin) "离开回收站" else "回收站") {
                 onDismiss()
-                vm.orgBeginSelecting()
+                vm.orgToggleBin()
             }
-            OrgSheetItem("清除过滤") {
-                vm.orgClearFilters()
-                vm.orgSetQuery("")
-            }
-            OrgSheetItem("复制全部") {
-                // Every note the filter is showing, each with its 唯一 ID on a line
-                // of its own — the text 指令's batch names the rows by.
-                val shown = OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, -1, vm.orgExcluded)
-                clipboard.setText(AnnotatedString(OrgModel.noteCopyText(catalog, shown.map { it.id })))
-                onDismiss()
-            }
-            OrgSheetItem("指令…") { onCommands() }
         }
     }
 }
@@ -1538,43 +1590,56 @@ private fun OrgTasksMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit, onComma
         contentColor = colors.textPrimary,
     ) {
         Column(modifier = Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
-            OrgSheetHeader("视图")
-            // The desktop's copy puts 列表/平铺 in the card's header; on a phone the
-            // toolbar has no room for it beside 搜索, 排序 and the undo pair, and a
-            // squeezed title is the price of trying.
-            OrgSheetItem("列表", selected = vm.orgMode == 0) {
-                vm.orgPickMode(0)
-                onDismiss()
+            if (vm.orgBin) {
+                // The bin's own verb; see [OrgNotesMenuSheet] for why nothing else
+                // is offered while it is open.
+                OrgSheetItem("清空回收站", danger = true) {
+                    onDismiss()
+                    vm.orgEmptyBin()
+                }
+            } else {
+                OrgSheetHeader("视图")
+                // The desktop's copy puts 列表/平铺 in the card's header; on a phone the
+                // toolbar has no room for it beside 搜索, 排序 and the undo pair, and a
+                // squeezed title is the price of trying.
+                OrgSheetItem("列表", selected = vm.orgMode == 0) {
+                    vm.orgPickMode(0)
+                    onDismiss()
+                }
+                OrgSheetItem("平铺", selected = vm.orgMode == 1) {
+                    vm.orgPickMode(1)
+                    onDismiss()
+                }
+                HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
+                OrgSheetItem("多选") {
+                    onDismiss()
+                    vm.orgBeginSelecting()
+                }
+                OrgSheetItem("复制全部") {
+                    // Every task the filter is showing, each with its 唯一 ID — the
+                    // tasks' half of what 复制全部 hands an AI.
+                    val shown = OrgModel.tasks(
+                        catalog = catalog,
+                        view = vm.orgView,
+                        list = vm.orgList,
+                        query = vm.orgQuery,
+                        sort = vm.orgTaskSort,
+                        selected = -1,
+                        showDone = vm.orgShowDone,
+                        dates = OrgModel.Dates.now(),
+                        tag = vm.orgTag,
+                        exclude = vm.orgExcluded,
+                    )
+                    clipboard.setText(AnnotatedString(OrgModel.taskCopyText(catalog, shown.map { it.id })))
+                    onDismiss()
+                }
+                OrgSheetItem("新建清单") { creating = true }
+                OrgSheetItem("指令…") { onCommands() }
             }
-            OrgSheetItem("平铺", selected = vm.orgMode == 1) {
-                vm.orgPickMode(1)
+            OrgSheetItem(if (vm.orgBin) "离开回收站" else "回收站") {
                 onDismiss()
+                vm.orgToggleBin()
             }
-            HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
-            OrgSheetItem("多选") {
-                onDismiss()
-                vm.orgBeginSelecting()
-            }
-            OrgSheetItem("复制全部") {
-                // Every task the filter is showing, each with its 唯一 ID — the
-                // tasks' half of what 复制全部 hands an AI.
-                val shown = OrgModel.tasks(
-                    catalog = catalog,
-                    view = vm.orgView,
-                    list = vm.orgList,
-                    query = vm.orgQuery,
-                    sort = vm.orgTaskSort,
-                    selected = -1,
-                    showDone = vm.orgShowDone,
-                    dates = OrgModel.Dates.now(),
-                    tag = vm.orgTag,
-                    exclude = vm.orgExcluded,
-                )
-                clipboard.setText(AnnotatedString(OrgModel.taskCopyText(catalog, shown.map { it.id })))
-                onDismiss()
-            }
-            OrgSheetItem("新建清单") { creating = true }
-            OrgSheetItem("指令…") { onCommands() }
         }
     }
 }
@@ -1598,6 +1663,20 @@ private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: Q
     ) {
         Column(modifier = Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 12.dp)) {
             OrgSheetHeader(row.content.lineSequence().first().take(24).ifEmpty { "空白笔记" })
+            if (row.binned) {
+                // 回收站's own two verbs (core ADR-0003), and nothing else: 置顶,
+                // 评论 and 转为待办 are all writes to a row on a list, and this one
+                // is not on a list.
+                OrgSheetItem("恢复") {
+                    onDismiss()
+                    vm.orgRestore(row.id)
+                }
+                HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
+                OrgSheetItem("彻底删除", danger = true) {
+                    onDismiss()
+                    vm.orgPurge(row.id)
+                }
+            } else {
             OrgSheetItem(if (row.pinned) "取消置顶" else "置顶") {
                 vm.orgToggleNotePinned(row.id, !row.pinned)
                 onDismiss()
@@ -1628,6 +1707,7 @@ private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: Q
                 onDismiss()
                 vm.orgDeleteNote(row.id)
             }
+            }
         }
     }
 }
@@ -1652,6 +1732,18 @@ private fun OrgTaskMenuSheet(
             modifier = Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 12.dp),
         ) {
             OrgSheetHeader(row.title.ifEmpty { "无标题" })
+            if (row.binned) {
+                // The bin's own two verbs; see [OrgNoteMenuSheet].
+                OrgSheetItem("恢复") {
+                    onDismiss()
+                    vm.orgRestore(row.id)
+                }
+                HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
+                OrgSheetItem("彻底删除", danger = true) {
+                    onDismiss()
+                    vm.orgPurge(row.id)
+                }
+            } else {
             OrgSheetItem("打开详情") {
                 onDismiss()
                 vm.orgSelectTask(row.id)
@@ -1677,6 +1769,7 @@ private fun OrgTaskMenuSheet(
             OrgSheetItem("删除任务", danger = true) {
                 onDismiss()
                 vm.orgDeleteTask(row.id)
+            }
             }
         }
     }

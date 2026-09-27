@@ -665,5 +665,76 @@ class OrgModelTest {
         assertEquals("排除 #工作 #项目", OrgModel.excludedLabel(setOf("项目", "工作")))
     }
 
+    // ─── 回收站 (core ADR-0003) ─────────────────────────────────────────────
+
+    @Test
+    fun a_binned_note_is_on_no_list_and_in_the_bin() {
+        val catalog = OrgCatalog.Empty.copy(
+            notes = listOf(
+                note(1, body = "留下"),
+                note(2, body = "进回收站").copy(deletedAt = 100),
+                note(3, body = "也进").copy(deletedAt = 200),
+            ),
+        )
+        // The same catalog answers both halves, and a list draws only the live one.
+        assertEquals(listOf(1L), OrgModel.notes(catalog, "", "", 0, -1).map { it.id })
+        // Newest-binned first: a bin is read as "what did I just throw away".
+        assertEquals(listOf(3L, 2L), OrgModel.binNotes(catalog).map { it.id })
+        assertEquals(2 to 0, OrgModel.binCounts(catalog))
+        assertTrue(OrgModel.binNotes(catalog).all { it.binned })
+        assertTrue(OrgModel.notes(catalog, "", "", 0, -1).none { it.binned })
+        // The needle applies to the bin…
+        assertEquals(listOf(3L), OrgModel.binNotes(catalog, "也进").map { it.id })
+        // …and a binned reply is not a reply on screen.
+        assertEquals(0, OrgModel.commentCount(catalog, 2))
+    }
+
+    @Test
+    fun a_binned_task_leaves_every_list_the_board_and_the_footer() {
+        val catalog = OrgCatalog.Empty.copy(
+            tasks = listOf(
+                task(1, title = "留下"),
+                task(2, title = "进回收站").copy(deletedAt = 100, done = true),
+            ),
+        )
+        assertEquals(
+            listOf(1L),
+            OrgModel.tasks(catalog, ORG_VIEW_ALL, -1, "", 0, -1, false, dates).map { it.id },
+        )
+        // 收集箱 1 / 今天 0 / 近七天 0 / 全部 1 / 已完成 0 — the binned, *finished* task
+        // is in none of them, which is the one the counts would otherwise have
+        // counted twice over.
+        assertEquals(listOf(1, 0, 0, 1, 0), OrgModel.smartCounts(catalog, "", dates))
+        assertEquals(0 to 1, OrgModel.progress(catalog))
+        // A binned task is on no board: the bin is a place and a column is a list.
+        assertEquals(
+            listOf(1L),
+            OrgModel.board(catalog, "", 0, dates).flatMap { it.cards }.map { it.id },
+        )
+        // The chip counts are the live ones.
+        assertEquals(1, OrgModel.listChips(catalog, ORG_VIEW_INBOX, -1)[0].count)
+        // And the bin reaches it.
+        assertEquals(listOf(2L), OrgModel.binTasks(catalog, dates).map { it.id })
+        assertTrue(OrgModel.binTasks(catalog, dates)[0].binned)
+        assertEquals(0 to 1, OrgModel.binCounts(catalog))
+    }
+
+    @Test
+    fun the_tag_row_counts_the_live_rows_only() {
+        val catalog = OrgCatalog.Empty.copy(
+            notes = listOf(
+                note(1, tags = listOf("项目/工作")),
+                note(2, tags = listOf("项目/工作")).copy(deletedAt = 100),
+            ),
+        )
+        // A chip's number is how many rows tapping it would leave on screen, so the
+        // bin's rows are not in it — the same reason the bin hides the tag row.
+        assertEquals(listOf("项目" to 1), OrgModel.tagChips(catalog).map { it.name to it.count })
+        assertEquals(
+            listOf("项目/工作" to 1),
+            OrgModel.tagChips(catalog, "项目").map { it.name to it.count },
+        )
+    }
+
     private fun ids(rows: List<OrgModel.TaskRow>): List<Long> = rows.map { it.id }
 }

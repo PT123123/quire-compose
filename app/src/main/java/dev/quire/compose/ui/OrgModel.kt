@@ -112,6 +112,11 @@ object OrgModel {
          * so every projection here keeps working on one shape (ADR-0015).
          */
         val ref: Long? = null,
+        /**
+         * Whether this note is in 回收站 (core ADR-0003). The row model carries it
+         * so a row can draw its own two verbs without asking the catalog again.
+         */
+        val binned: Boolean = false,
     )
 
     /** One task as the 任务 list paints it. */
@@ -138,6 +143,8 @@ object OrgModel {
         val subtasksTotal: Int,
         val whenText: String,
         val selected: Boolean,
+        /** Whether this task is in 回收站; see [NoteRow.binned]. */
+        val binned: Boolean = false,
     )
 
     data class SubtaskRow(val id: Long, val title: String, val done: Boolean)
@@ -188,6 +195,10 @@ object OrgModel {
     ): List<NoteRow> {
         val needle = query.trim().lowercase()
         val rows = catalog.notes
+            // 回收站 (core ADR-0003): the catalog carries both halves of the
+            // collection and a *list* draws one of them. `binNotes` is the other
+            // question, asked by the bin.
+            .filter { it.deletedAt == null }
             .filter { noteMatches(it, needle) }
             // The empty path is no filter, and it has to be said out loud: `any` over
             // a note that carries no tags at all is false, so a tagless note would be
@@ -214,6 +225,7 @@ object OrgModel {
         pinned = note.pinned,
         selected = selected,
         ref = note.ref,
+        binned = note.deletedAt != null,
     )
 
     /**
@@ -225,13 +237,16 @@ object OrgModel {
      */
     fun comments(catalog: OrgCatalog, noteId: Long): List<NoteRow> =
         catalog.notes
-            .filter { it.ref == noteId }
+            // A reply that is itself in 回收站 is not a reply on screen: the bin
+            // holds it, and the thread it answered reads without it until it comes
+            // back.
+            .filter { it.ref == noteId && it.deletedAt == null }
             .sortedWith(compareByDescending<OrgNote> { it.created }.thenByDescending { it.id })
             .map { noteRow(it, selected = false) }
 
     /** How many replies a note has, for the 详细信息 sheet. */
     fun commentCount(catalog: OrgCatalog, noteId: Long): Int =
-        catalog.notes.count { it.ref == noteId }
+        catalog.notes.count { it.ref == noteId && it.deletedAt == null }
 
     /**
      * What a `↩` preview says: the parent's first non-empty line, trimmed to a
@@ -288,7 +303,13 @@ object OrgModel {
      * filter for rows that are not there (the desktop's `org_tag_rows_of`).
      */
     fun tagChips(catalog: OrgCatalog, path: String = "", isTask: Boolean = false): List<TagChip> =
-        tagCounts(if (isTask) catalog.tasks.map { it.tags } else catalog.notes.map { it.tags }).entries
+        tagCounts(
+            if (isTask) {
+                catalog.tasks.filter { it.deletedAt == null }.map { it.tags }
+            } else {
+                catalog.notes.filter { it.deletedAt == null }.map { it.tags }
+            },
+        ).entries
             .filter { (full, _) -> tagParentPath(full).orEmpty() == path }
             .map { TagChip(it.key, it.value) }
             .sortedWith(compareByDescending<TagChip> { it.count }.thenBy { it.name })
@@ -455,16 +476,19 @@ object OrgModel {
         // 已完成 is the one view whose answer *is* the finished ones; everywhere
         // else they are hidden until the footer's switch says otherwise.
         val keepDone = showDone || view == ORG_VIEW_DONE
-        val rows = catalog.tasks.filter { task ->
-            val bucket = if (list >= 0) task.list == list else inSmartView(catalog, task, view, dates)
-            val finished = if (view == ORG_VIEW_DONE) task.done else !task.done || keepDone
-            // The tag filter is the same two halves the notes' list has: 仅显示 by a
-            // path and its subtree, then 排除 by a path and its subtree. The tasks'
-            // half had no tag filter at all before ADR-0002's shell slice.
-            val shown = tag.isEmpty() || task.tags.any { tagMatches(it, tag) }
-            bucket && finished && shown && taskMatches(task, needle) &&
-                !tagExcluded(task.tags, exclude)
-        }
+        val rows = catalog.tasks
+            .filter { it.deletedAt == null }
+            .filter { task ->
+                val bucket =
+                    if (list >= 0) task.list == list else inSmartView(catalog, task, view, dates)
+                val finished = if (view == ORG_VIEW_DONE) task.done else !task.done || keepDone
+                // The tag filter is the same two halves the notes' list has: 仅显示 by a
+                // path and its subtree, then 排除 by a path and its subtree. The tasks'
+                // half had no tag filter at all before ADR-0002's shell slice.
+                val shown = tag.isEmpty() || task.tags.any { tagMatches(it, tag) }
+                bucket && finished && shown && taskMatches(task, needle) &&
+                    !tagExcluded(task.tags, exclude)
+            }
         return sortTasks(rows, sort)
             .map { taskRow(catalog, it, dates, it.id == selected) }
     }
@@ -499,6 +523,7 @@ object OrgModel {
             subtasksTotal = task.subtasks.size,
             whenText = ageText(task.edited),
             selected = selected,
+            binned = task.deletedAt != null,
         )
     }
 
@@ -516,7 +541,9 @@ object OrgModel {
             color = 0,
             // The inbox's count is every task that *reads* as the inbox's, which
             // includes a task whose list a merge left dangling.
-            count = catalog.tasks.count { task -> catalog.lists.none { it.id == task.list } },
+            count = catalog.tasks.count { task ->
+                task.deletedAt == null && catalog.lists.none { it.id == task.list }
+            },
             selected = list < 0 && view == ORG_VIEW_INBOX,
             smart = true,
         )
@@ -527,7 +554,7 @@ object OrgModel {
                     id = stored.id,
                     name = stored.name,
                     color = stored.color,
-                    count = catalog.tasks.count { it.list == stored.id },
+                    count = catalog.tasks.count { it.list == stored.id && it.deletedAt == null },
                     selected = list >= 0 && stored.id == list,
                     smart = false,
                 )
@@ -545,7 +572,8 @@ object OrgModel {
         val needle = query.trim().lowercase()
         return (0..4).map { slot ->
             catalog.tasks.count { task ->
-                task.done == (slot == ORG_VIEW_DONE) &&
+                task.deletedAt == null &&
+                    task.done == (slot == ORG_VIEW_DONE) &&
                     inSmartView(catalog, task, slot, dates) &&
                     taskMatches(task, needle)
             }
@@ -571,7 +599,9 @@ object OrgModel {
                     } else {
                         task.list == id
                     }
-                    bucket && !task.done && taskMatches(task, needle)
+                    // A binned task is on no board: the bin is a place, and a
+                    // column is a list.
+                    task.deletedAt == null && bucket && !task.done && taskMatches(task, needle)
                 },
                 sort,
             ).map { task ->
@@ -631,7 +661,8 @@ object OrgModel {
             ?: smartNames.getOrElse(view) { smartNames[ORG_VIEW_INBOX] }
         val count = catalog.tasks.count { task ->
             val bucket = if (list >= 0) task.list == list else inSmartView(catalog, task, view, dates)
-            bucket && task.done == (view == ORG_VIEW_DONE) && taskMatches(task, needle)
+            task.deletedAt == null && bucket && task.done == (view == ORG_VIEW_DONE) &&
+                taskMatches(task, needle)
         }
         return title to "$count 项待办"
     }
@@ -641,8 +672,45 @@ object OrgModel {
      * that moved when the user typed a search would be answering a different
      * question from the one it looks like it answers.
      */
-    fun progress(catalog: OrgCatalog): Pair<Int, Int> =
-        catalog.tasks.count { it.done } to catalog.tasks.size
+    fun progress(catalog: OrgCatalog): Pair<Int, Int> {
+        // The live half only: a binned task is off the lists, and a footer that
+        // counted it would be the window disagreeing with itself.
+        val live = catalog.tasks.filter { it.deletedAt == null }
+        return live.count { it.done } to live.size
+    }
+
+    // ─── 回收站 (core ADR-0003) ─────────────────────────────────────────────
+
+    /**
+     * The notes in 回收站, most recently binned first — *when it went in* rather
+     * than when it was written, because that is the order a reader of a bin is
+     * looking for.
+     *
+     * The **needle applies and the tag filter does not**: searching a bin is a
+     * question with an answer, while the tag row's counts are the live notes' and a
+     * filter over them would narrow by a number drawn from somewhere else.
+     */
+    fun binNotes(catalog: OrgCatalog, query: String = "", selected: Long = -1): List<NoteRow> {
+        val needle = query.trim().lowercase()
+        return catalog.notes
+            .filter { it.deletedAt != null && noteMatches(it, needle) }
+            .sortedWith(compareByDescending<OrgNote> { it.deletedAt }.thenByDescending { it.id })
+            .map { noteRow(it, it.id == selected) }
+    }
+
+    /** The tasks in 回收站, on the same terms. */
+    fun binTasks(catalog: OrgCatalog, dates: Dates, query: String = "", selected: Long = -1): List<TaskRow> {
+        val needle = query.trim().lowercase()
+        return catalog.tasks
+            .filter { it.deletedAt != null && taskMatches(it, needle) }
+            .sortedWith(compareByDescending<OrgTask> { it.deletedAt }.thenByDescending { it.id })
+            .map { taskRow(catalog, it, dates, it.id == selected) }
+    }
+
+    /** How many rows each half's 回收站 holds, for the nav row's count. */
+    fun binCounts(catalog: OrgCatalog): Pair<Int, Int> =
+        catalog.notes.count { it.deletedAt != null } to
+            catalog.tasks.count { it.deletedAt != null }
 
     // ─── the shared vocabulary ──────────────────────────────────────────────
 

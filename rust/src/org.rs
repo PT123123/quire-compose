@@ -361,6 +361,9 @@ impl Organizer {
             // in the same `CreateNote` as everything else, so a reply is one undo
             // step and never exists for a moment without its parent.
             ref_note: ref_note.map(|r| NoteId(r.max(0) as u64)),
+            // Born live, like every new row: the bin is what a *delete* puts a row
+            // into, and a row nobody has deleted is not there.
+            deleted_at: None,
         };
         let changes = self
             .apply(doc, hist, Command::CreateNote { note })
@@ -471,6 +474,96 @@ impl Organizer {
             .ok_or_else(|| "这条笔记没有删掉".to_string())
     }
 
+    // ─── 回收站 (SPEC §四十一, core ADR-0003) ────────────────────────────────
+    //
+    // Trashing and restoring are the two writes whose *content* does not change:
+    // they stamp or clear `deleted_at` and nothing else, and deliberately do **not**
+    // restamp `edited` — a row's last real edit is still its last real edit, and
+    // the desktop's 详细信息 would be lying if a trip to the bin made a note look
+    // freshly written. `deleted_at` is the bin's own clock. Only `purge_*` removes
+    // a row, and only `delete_*` above is that verb.
+
+    fn set_note_trashed(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        id: i64,
+        trashed: bool,
+    ) -> Result<Vec<Change>, String> {
+        let before = self.note_of(id).ok_or_else(|| format!("no such note: {id}"))?;
+        let mut after = before.clone();
+        after.deleted_at = trashed.then(now_secs);
+        if after == before {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .apply(
+                doc,
+                hist,
+                Command::UpdateNote {
+                    id: NoteId(id.max(0) as u64),
+                    before,
+                    after,
+                },
+            )
+            .unwrap_or_default())
+    }
+
+    /// 回收站 (core ADR-0003): move a note to the bin — the verb the UI's 🗑 is.
+    /// `purge_note` is the one that removes it.
+    pub fn trash_note(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        id: i64,
+    ) -> Result<Vec<Change>, String> {
+        self.set_note_trashed(doc, hist, id, true)
+    }
+
+    /// 恢复: take one note back out of 回收站.
+    pub fn restore_note(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        id: i64,
+    ) -> Result<Vec<Change>, String> {
+        self.set_note_trashed(doc, hist, id, false)
+    }
+
+    /// 彻底删除: the one write that removes a note. Its undo is the only way back,
+    /// because there is no bin behind the bin.
+    pub fn purge_note(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        id: i64,
+    ) -> Result<Vec<Change>, String> {
+        self.delete_note(doc, hist, id)
+    }
+
+    /// 清空回收站: every binned note, purged in **one** batch — so the whole
+    /// emptying is one 撤销. A bin that took twenty undos to refill would be a trap.
+    pub fn empty_note_bin(&mut self, doc: &mut Document, hist: &mut History) -> Result<usize, String> {
+        let notes: Vec<Note> = self
+            .catalog
+            .notes
+            .iter()
+            .filter(|n| n.is_trashed())
+            .cloned()
+            .collect();
+        let count = notes.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        let cmds: Vec<Command> = notes
+            .into_iter()
+            .map(|note| Command::DeleteNote { note })
+            .collect();
+        self.apply_all(doc, hist, cmds)
+            .ok_or_else(|| "回收站没有清掉".to_string())?;
+        Ok(count)
+    }
+
     // ─── tasks ──────────────────────────────────────────────────────────────
 
     /// Where a task appended to `list` sits: one key after the last task already
@@ -519,6 +612,8 @@ impl Organizer {
             created: now,
             edited: now,
             ord,
+            // Born live; see `add_note`.
+            deleted_at: None,
         };
         let changes = self
             .apply(doc, hist, Command::CreateTask { task })
@@ -696,6 +791,85 @@ impl Organizer {
         let task = self.task_of(id).ok_or_else(|| format!("no such task: {id}"))?;
         self.apply(doc, hist, Command::DeleteTask { task })
             .ok_or_else(|| "这条任务没有删掉".to_string())
+    }
+
+    /// The tasks' half of 回收站, on exactly [`Self::set_note_trashed`]'s terms.
+    fn set_task_trashed(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        id: i64,
+        trashed: bool,
+    ) -> Result<Vec<Change>, String> {
+        let before = self.task_of(id).ok_or_else(|| format!("no such task: {id}"))?;
+        let mut after = before.clone();
+        after.deleted_at = trashed.then(now_secs);
+        if after == before {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .apply(
+                doc,
+                hist,
+                Command::UpdateTask {
+                    id: TaskId(id.max(0) as u64),
+                    before,
+                    after,
+                },
+            )
+            .unwrap_or_default())
+    }
+
+    /// 回收站 for a task: see [`Self::trash_note`].
+    pub fn trash_task(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        id: i64,
+    ) -> Result<Vec<Change>, String> {
+        self.set_task_trashed(doc, hist, id, true)
+    }
+
+    /// 恢复 for a task.
+    pub fn restore_task(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        id: i64,
+    ) -> Result<Vec<Change>, String> {
+        self.set_task_trashed(doc, hist, id, false)
+    }
+
+    /// 彻底删除 for a task.
+    pub fn purge_task(
+        &mut self,
+        doc: &mut Document,
+        hist: &mut History,
+        id: i64,
+    ) -> Result<Vec<Change>, String> {
+        self.delete_task(doc, hist, id)
+    }
+
+    /// 清空回收站 for the tasks half.
+    pub fn empty_task_bin(&mut self, doc: &mut Document, hist: &mut History) -> Result<usize, String> {
+        let tasks: Vec<Task> = self
+            .catalog
+            .tasks
+            .iter()
+            .filter(|t| t.is_trashed())
+            .cloned()
+            .collect();
+        let count = tasks.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        let cmds: Vec<Command> = tasks
+            .into_iter()
+            .map(|task| Command::DeleteTask { task })
+            .collect();
+        self.apply_all(doc, hist, cmds)
+            .ok_or_else(|| "回收站没有清掉".to_string())?;
+        Ok(count)
     }
 
     // ─── the checklist ──────────────────────────────────────────────────────
@@ -956,6 +1130,7 @@ fn note_command_of(
             created: now,
             edited: now,
             ref_note: None,
+            deleted_at: None,
         };
         *next += 1;
         sim.notes.push(note.clone());
@@ -1008,14 +1183,25 @@ fn note_command_of(
                 created: now,
                 edited: now,
                 ref_note: Some(id),
+                deleted_at: None,
             };
             *next += 1;
             sim.notes.push(comment.clone());
             return Ok(Command::CreateNote { note: comment });
         }
+        // 回收站 (core ADR-0003): an instruction's `delete` is the same verb the
+        // UI's 🗑 is — *binned*, not removed — so a batch can be taken back and the
+        // row is still there for a `restore`. Neither verb moves `edited`: the
+        // content did not change.
         "delete" => {
-            sim.notes.retain(|n| n.id != id);
-            return Ok(Command::DeleteNote { note: before });
+            after.edited = before.edited;
+            after.deleted_at = Some(now);
+            Command::UpdateNote { id, before, after: after.clone() }
+        }
+        "restore" => {
+            after.edited = before.edited;
+            after.deleted_at = None;
+            Command::UpdateNote { id, before, after: after.clone() }
         }
         other => return Err(format!("笔记不支持动作 {other}")),
     };
@@ -1059,6 +1245,7 @@ fn task_command_of(
             created: now,
             edited: now,
             ord,
+            deleted_at: None,
         };
         *next += 1;
         sim.tasks.push(task.clone());
@@ -1069,10 +1256,6 @@ fn task_command_of(
         .task(id)
         .cloned()
         .ok_or_else(|| "任务不存在".to_string())?;
-    if action == "delete" {
-        sim.tasks.retain(|t| t.id != id);
-        return Ok(Command::DeleteTask { task: before });
-    }
     let mut after = before.clone();
     after.edited = now;
     let cmd = match action {
@@ -1186,6 +1369,19 @@ fn task_command_of(
             } else {
                 format!("{}\n\n{}", after.notes, text)
             };
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        // 回收站 (core ADR-0003): `delete` bins the task rather than removing it,
+        // exactly as the UI's 🗑 does, and `restore` takes it back out. Neither
+        // moves `edited` — the content did not change.
+        "delete" => {
+            after.edited = before.edited;
+            after.deleted_at = Some(now);
+            Command::UpdateTask { id, before, after: after.clone() }
+        }
+        "restore" => {
+            after.edited = before.edited;
+            after.deleted_at = None;
             Command::UpdateTask { id, before, after: after.clone() }
         }
         other => return Err(format!("任务不支持动作 {other}")),
@@ -1382,6 +1578,7 @@ mod tests {
             created: 0,
             edited: 0,
             ref_note: None,
+            deleted_at: None,
         });
         let payload: serde_json::Value = serde_json::from_str(&format!(
             r#"{{"operations":[
@@ -1456,6 +1653,7 @@ mod tests {
                 created: 0,
                 edited: 0,
                 ref_note: None,
+                deleted_at: None,
             }],
             lists: vec![TaskList {
                 id: ListId(3),
@@ -1485,6 +1683,7 @@ mod tests {
                 created: 0,
                 edited: 0,
                 ord: OrderKey::FIRST,
+                deleted_at: None,
             }],
         });
         assert_eq!(organizer.next_note, 8);

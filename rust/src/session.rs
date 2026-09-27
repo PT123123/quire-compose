@@ -233,6 +233,25 @@ pub enum Request {
         task: i64,
         list: i64,
     },
+    /// 回收站 (SPEC §四十一, core ADR-0003): take a row back out of the bin.
+    OrgRestoreNote {
+        note: i64,
+    },
+    OrgRestoreTask {
+        task: i64,
+    },
+    /// 彻底删除: the one write that removes a row, and the only one whose undo is
+    /// the only way back — there is no bin behind the bin.
+    OrgPurgeNote {
+        note: i64,
+    },
+    OrgPurgeTask {
+        task: i64,
+    },
+    /// 清空回收站 for one half, as **one** batch: the whole emptying is one 撤销.
+    OrgEmptyBin {
+        task: bool,
+    },
     OrgDeleteTask {
         task: i64,
     },
@@ -651,7 +670,10 @@ impl Session {
                 self.org_op(|org, doc, hist| org.note_tags(doc, hist, note, tags))
             }
             Request::OrgDeleteNote { note } => {
-                self.org_op(|org, doc, hist| org.delete_note(doc, hist, note))
+                // 回收站 (core ADR-0003): the UI's 🗑 *bins* the note — an
+                // `UpdateNote` that stamps `deleted_at` — and only `OrgPurgeNote`
+                // removes it. The verb kept its name because the button did.
+                self.org_op(|org, doc, hist| org.trash_note(doc, hist, note))
             }
             Request::OrgQuickAdd { list, title, tags, due } => self.org_op(|org, doc, hist| {
                 org.quick_add(doc, hist, list, title, tags, due)
@@ -681,7 +703,30 @@ impl Session {
                 self.org_op(|org, doc, hist| org.task_list(doc, hist, task, list))
             }
             Request::OrgDeleteTask { task } => {
-                self.org_op(|org, doc, hist| org.delete_task(doc, hist, task))
+                // The tasks' half of the same rule: 🗑 bins, 彻底删除 removes.
+                self.org_op(|org, doc, hist| org.trash_task(doc, hist, task))
+            }
+            Request::OrgRestoreNote { note } => {
+                self.org_op(|org, doc, hist| org.restore_note(doc, hist, note))
+            }
+            Request::OrgRestoreTask { task } => {
+                self.org_op(|org, doc, hist| org.restore_task(doc, hist, task))
+            }
+            Request::OrgPurgeNote { note } => {
+                self.org_op(|org, doc, hist| org.purge_note(doc, hist, note))
+            }
+            Request::OrgPurgeTask { task } => {
+                self.org_op(|org, doc, hist| org.purge_task(doc, hist, task))
+            }
+            Request::OrgEmptyBin { task } => {
+                if task {
+                    let count = self.org.empty_task_bin(&mut self.doc, &mut self.hist)?;
+                    self.notice = Some(format!("已清空回收站，{count} 项"));
+                } else {
+                    let count = self.org.empty_note_bin(&mut self.doc, &mut self.hist)?;
+                    self.notice = Some(format!("已清空回收站，{count} 项"));
+                }
+                Ok(Outcome::Full)
             }
             Request::OrgSubtaskAdd { task } => {
                 self.org_op(|org, doc, hist| org.subtask_add(doc, hist, task))

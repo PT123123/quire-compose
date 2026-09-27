@@ -4,6 +4,55 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0020 · 回收站 is a mode of the page, and a delete is a stamp
+
+Decision: this shell has a **回收站** (core ADR-0003). The overflow's 回收站 item
+flips a session flag; the page then lists the *binned* half of the catalog, the
+title says which one is showing, each card's or row's ⋯ carries **恢复** and
+**彻底删除**, and the overflow offers **清空回收站**. The 🗑 and the selection bar's
+删除 now stamp `deletedAt` (one `orgDeleteNote` / `orgDeleteTask`, which the bridge
+now routes to `trash_note` / `trash_task`) instead of removing the row; only the
+purge — and the emptying — remove one.
+
+**A mode, not a destination.** `orgBin` is a `QuireViewModel` flag, so it survives a
+rotation and writes nothing, like every other "what am I looking at" here. It is not
+a fourth drawer entry: the bin is the *page* turned over, so it shows the half the
+user is standing on and its own two verbs are on that half's rows.
+
+**`OrgModel` learns one question.** Every projection that draws a list — notes,
+tasks, the board, the footer, the smart counts, the list chips, the tag row, the
+comment count — moved to the live half of the catalog; `binNotes` / `binTasks` /
+`binCounts` are the other question. That is why the accessors exist in core rather
+than here: the collection is core's, so "which half of it" is core's question to
+answer (core ADR-0003).
+
+Why: the README has carried this as the missing piece since the organizer landed —
+"a real 回收站 needs soft delete in `quire-core` (a column, the store, the merge), a
+settings page, and restore/purge". The delete's only way back was the three-second
+撤销 bar, which expires; now it is reversible twice over and the second door does
+not.
+
+Consequences:
+
+- **One 撤销 each.** Trash, restore and purge are ordinary one-row commands, and
+  清空回收站 is one `exec_all` batch — so the whole bin empties and refills in one
+  space, exactly as a batched delete already did.
+- **`edited` does not move.** A trip to the bin is not an edit of a row's content,
+  so a restored note does not read as freshly written.
+- The **search box applies to the bin** and nothing else does: the smart views, the
+  list chips and the tag row are all questions about a *list*, so they are not drawn
+  while the bin is open, and picking one closes it. 多选 leaves with it, because a
+  pick is a set of rows on a list.
+- **A binned reply leaves its thread** and a binned task leaves its list's chip
+  count: the count of a thing nobody can see is a count that disagrees with the list.
+- 指令's `delete` now means *bin* and a new `restore` action is its mirror; the
+  templates say so.
+- **A core rev bump** (`4899857 → fbfdaca`) carrying the tombstone, the `live_*`
+  accessors and **snapshot version 2 → 3** — so the desktop shell ships with this
+  one, and an older peer refuses the sync rather than resurrecting deleted rows.
+- **Still not here**: an automatic empty-the-bin policy, and any history — the bin
+  knows *when* a row went in, not what it used to be.
+
 ## ADR-0019 · The AI round trip and the filter's other half
 
 Decision: the three things the desktop shell had that this one did not —

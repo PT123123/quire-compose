@@ -156,6 +156,11 @@ pub struct OrgNoteRow {
     /// its own.
     #[serde(rename = "ref")]
     pub ref_note: Option<u64>,
+    /// The instant this note went into 回收站, or `None` while it is live (core
+    /// ADR-0003). Sent rather than filtered out here: the whole catalog is what the
+    /// Kotlin side projects, and "which half of one collection" is a question the
+    /// app layer asks — `OrgModel` answers it with `liveNotes` / `trashedNotes`.
+    pub deleted_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -195,6 +200,9 @@ pub struct OrgTaskRow {
     /// Reading order inside the list — a dense key, so the "added order" sort is
     /// a comparison of two numbers.
     pub ord: u64,
+    /// The instant this task went into 回收站, or `None` while it is live —
+    /// [`OrgNoteRow::deleted_at`]'s field, one entity over.
+    pub deleted_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -224,6 +232,7 @@ pub fn org_catalog(org: &OrganizerCatalog) -> OrgCatalog {
                 created: n.created,
                 edited: n.edited,
                 ref_note: n.ref_note.map(|r| r.0),
+                deleted_at: n.deleted_at,
             })
             .collect(),
         tasks: org
@@ -253,6 +262,7 @@ pub fn org_catalog(org: &OrganizerCatalog) -> OrgCatalog {
                 created: t.created,
                 edited: t.edited,
                 ord: t.ord.0,
+                deleted_at: t.deleted_at,
             })
             .collect(),
         lists: org

@@ -192,6 +192,25 @@ class Bridge(private val handle: Long) {
     fun orgUndo(): Reply = send("orgUndo")
     fun orgRedo(): Reply = send("orgRedo")
 
+    // ─── 回收站 (SPEC §四十一, core ADR-0003) ────────────────────────────────
+    //
+    // `orgDeleteNote` / `orgDeleteTask` above now *bin* a row — the same verb the
+    // 🗑 is — and these three are the rest of the bin's vocabulary: take one row
+    // back out, remove one for good, or empty a whole half in one undoable batch.
+
+    /** 恢复: take one row back out of the bin. */
+    fun orgRestoreNote(note: Long): Reply = send("orgRestoreNote", "note" to note)
+
+    fun orgRestoreTask(task: Long): Reply = send("orgRestoreTask", "task" to task)
+
+    /** 彻底删除: the one write that removes a row. Its undo is the only way back. */
+    fun orgPurgeNote(note: Long): Reply = send("orgPurgeNote", "note" to note)
+
+    fun orgPurgeTask(task: Long): Reply = send("orgPurgeTask", "task" to task)
+
+    /** 清空回收站 for one half, applied as **one** batch and therefore one 撤销. */
+    fun orgEmptyBin(task: Boolean): Reply = send("orgEmptyBin", "task" to task)
+
     /**
      * 指令 (SPEC §四十一): one batch of AI instructions for the notes half (`task =
      * false`) or the tasks half. `json` is the pasted `{"operations":[…]}` payload,

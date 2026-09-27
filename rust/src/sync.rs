@@ -1066,6 +1066,7 @@ mod tests {
             created: 1,
             edited: 1,
             ref_note: Some(local.notes[0].id),
+            deleted_at: None,
         });
 
         let peer = PeerRecord {

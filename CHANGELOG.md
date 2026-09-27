@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — 回收站
+
+The gap this README has named since the organizer landed ("a real 回收站 needs soft
+delete in `quire-core` — a column, the store, the merge"), done on all three repos
+together (ADR-0019, core ADR-0003). The pinned rev moves, and **snapshot version
+2 → 3**, so this shell and the desktop ship together.
+
+### A delete is a stamp
+
+- The 🗑 and the selection bar's 删除 now write `deletedAt` on the row instead of
+  removing it, so a delete is reversible twice over: the 撤销 bar for three seconds,
+  and the bin for as long as the user wants. Only 彻底删除 — and 清空回收站 — remove
+  a row.
+- The bin is a **mode of the page**, not a third destination: the overflow's
+  回收站/离开回收站 flips it, the title says which one is showing, and what the bin
+  lists is the half the user is standing on.
+
+### The bin
+
+- Each binned card's or row's ⋯ carries its own two verbs — **恢复** (back where it
+  was) and **彻底删除** — and the overflow's 清空回收站 purges the whole half as
+  **one** space on the undo stack.
+- The **search box applies to the bin** and the smart views, the list chips and the
+  tag row do not: all four are questions about a *list*. Picking any of them closes
+  the bin, and 多选 leaves with it — a pick is a set of rows on a list.
+- **`edited` does not move** when a row is binned; the content did not change.
+- 指令's `delete` now means *bin* — the same verb the 🗑 is — and a new `restore`
+  action is its mirror.
+
+### Also
+
+- `OrgModel` grew `binNotes` / `binTasks` / `binCounts`, and every list, board,
+  footer, chip and tag projection moved to the live half of the catalog. A binned
+  reply leaves its thread, and a binned task leaves its list's chip count — the
+  count of a thing nobody can see is a count that disagrees with the list.
+- `OrgModelTest` +3 (65 JVM tests), the bridge's `session_test` +1.
+- **Core rev `4899857 → fbfdaca`** and **snapshot version 3**: a peer that could not
+  see the tombstone would read a binned row as an ordinary remote edit and
+  resurrect it, so an older build refuses the sync instead.
+
 ## Unreleased — the AI round trip and the filter's other half
 
 Three things the desktop shell had and this one did not — all shell-side: no

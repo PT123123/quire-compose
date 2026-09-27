@@ -117,6 +117,12 @@ data class OrgNote(
      * that a ref which resolves to nothing simply paints as an ordinary note.
      */
     val ref: Long?,
+    /**
+     * The instant this note went into 回收站, or `null` while it is live (core
+     * ADR-0003). The whole catalog travels — both halves of it — and which half a
+     * screen draws is `OrgModel`'s question.
+     */
+    val deletedAt: Long? = null,
 )
 
 data class OrgSubtask(
@@ -147,6 +153,8 @@ data class OrgTask(
     val edited: Long,
     /** Reading order inside the list: the "添加顺序" sort is these two numbers. */
     val ord: Long,
+    /** The instant this task went into 回收站, or `null` while it is live. */
+    val deletedAt: Long? = null,
 )
 
 data class OrgList(
@@ -337,6 +345,7 @@ private fun parseNote(json: JSONObject) = OrgNote(
     created = json.optLong("created"),
     edited = json.optLong("edited"),
     ref = json.longOrNull("ref"),
+    deletedAt = json.longOrNull("deletedAt"),
 )
 
 private fun parseTask(json: JSONObject) = OrgTask(
@@ -357,6 +366,7 @@ private fun parseTask(json: JSONObject) = OrgTask(
     created = json.optLong("created"),
     edited = json.optLong("edited"),
     ord = json.optLong("ord"),
+    deletedAt = json.longOrNull("deletedAt"),
 )
 
 private fun parseSubtask(json: JSONObject) = OrgSubtask(

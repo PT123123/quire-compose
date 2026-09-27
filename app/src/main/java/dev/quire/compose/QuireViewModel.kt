@@ -233,6 +233,14 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     /**
+     * 回收站 (core ADR-0003): the *list* turned over — the bin holds the half the
+     * user is standing on, not a kind of its own. Session state, so it writes
+     * nothing, exactly like every other "what am I looking at" here.
+     */
+    var orgBin by mutableStateOf(false)
+        private set
+
+    /**
      * The tag filter's *include* half: the path being kept; `""` is no filter.
      * Shared by both tabs — the same question asked of whichever half is showing —
      * so it is one field rather than one per page.
@@ -302,6 +310,9 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgList = -1
         orgTag = ""
         orgExcluded = emptySet()
+        // The bin belongs to the *window*, but arriving at a destination is not
+        // where it should still be open: 收件箱 means the inbox.
+        orgBin = false
         orgQuery = ""
         orgSearchOpen = false
         orgNoteMenu = null
@@ -318,10 +329,15 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     fun orgPickView(view: Int) {
         orgView = view.coerceIn(0, 4)
         orgList = -1
+        // Picking a view is leaving the bin: 回收站 is a mode *over* the list, and
+        // "today's tasks" is not a question about a bin.
+        orgBin = false
     }
 
     fun orgPickList(list: Long) {
         orgList = list
+        // A list is a place and the bin is a place: picking one leaves the other.
+        orgBin = false
     }
 
     fun orgPickMode(mode: Int) {
@@ -354,6 +370,9 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun orgPickTag(tag: String) {
         orgTag = tag
+        // The tag row's counts are the *live* rows', so picking one leaves the bin —
+        // for the same reason picking a view does.
+        orgBin = false
     }
 
     /**
@@ -389,6 +408,30 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     fun orgToggleShowDone() {
         orgShowDone = !orgShowDone
     }
+
+    /**
+     * 回收站's own door: one flag, and the list beneath it swaps to the binned half
+     * the user is standing on. 多选 leaves with it — a pick is a set of rows on a
+     * list, and the bin is not that list.
+     */
+    fun orgToggleBin() {
+        orgBin = !orgBin
+        if (orgBin) orgStopSelecting()
+    }
+
+    /**
+     * 恢复: one row out of the bin, back where it was. Which half the id names is
+     * the page's own tab, exactly as the row's verbs already are.
+     */
+    fun orgRestore(id: Long) =
+        act { if (orgTab == ORG_TAB_TASKS) bridge.orgRestoreTask(id) else bridge.orgRestoreNote(id) }
+
+    /** 彻底删除: the one write that removes a row. Its undo is the only way back. */
+    fun orgPurge(id: Long) =
+        act { if (orgTab == ORG_TAB_TASKS) bridge.orgPurgeTask(id) else bridge.orgPurgeNote(id) }
+
+    /** 清空回收站: the whole half on screen, as **one** undo step. */
+    fun orgEmptyBin() = act { bridge.orgEmptyBin(orgTab == ORG_TAB_TASKS) }
 
     // ─── 多选 ────────────────────────────────────────────────────────────────
     //

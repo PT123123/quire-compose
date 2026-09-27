@@ -130,6 +130,12 @@ either of the other two destinations rather than leaving the app.
 - **Delete is undo-able.** Deleting a note or a task hides the row at once and shows
   a three-second **撤销** bar; the row is really deleted when the bar expires, so
   撤销 drops work that was never sent. There is no confirmation dialog.
+- **And a delete is only a stamp.** 回收站 is the page turned over, reached from the
+  overflow: it lists the binned half, each row's ⋯ carries **恢复** (back where it
+  was) and **彻底删除** (the only write that removes a row), and 清空回收站 empties the
+  half as one space on the undo stack. The search box applies to the bin and the
+  smart views, list chips and tag row do not — all four are questions about a
+  *list*, and picking one leaves the bin. So a delete is reversible twice over.
 - **任务**: the five smart views (收集箱 / 今天 / 近七天 / 全部 / 已完成), five sorts
   behind ⇅, per-page search, glass rows carrying the list's dot, the priority, the
   deadline and the tags, and a 4 dp progress bar with 已完成 X / Y — plus the same
@@ -187,9 +193,9 @@ Said plainly, because a shell that pretends is worse than one that is small:
   it: a note is one plain-text field.)
 - **The board ignores the tag filter.** 平铺 files by list and has no tag column, so
   the tag filter is a list-mode control — the desktop's board answers the same way.
-- **No persistent 回收站.** The deferred delete buys three seconds, not a bin: a
-  real one needs soft delete in `quire-core` (a column, the store, the merge), a
-  settings page, and restore/purge — a cross-repo slice of its own (ADR-0015).
+- **No bin policy.** 回收站 holds what the user deleted and can be emptied by hand,
+  but nothing empties it on a schedule. (The one real limit this no longer has is the
+  delete itself: it is a tombstone now, so it survives as long as the user wants.)
 - **A note has no history / 恢复版本.** The core keeps one copy of a note, so 撤销
   walks an edit back but 详细信息 has no versions to list, and says so.
 - **A repeating task does not roll forward** when it is completed. The rule is

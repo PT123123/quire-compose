@@ -556,6 +556,59 @@ fn a_comment_arrives_as_a_note_carrying_its_ref() {
     assert_eq!(view["org"]["notes"][0]["body"], "the parent");
 }
 
+/// 回收站 (SPEC §四十一, core ADR-0003): the 🗑 **bins** a note rather than removing
+/// it, `orgRestoreNote` takes it back out, `orgPurgeNote` is the one write that
+/// removes it, and `orgEmptyBin` empties a whole half as **one** undo step. The
+/// same catalog answers both halves, so a binned row is off every list and in the
+/// bin at the same time — which is what makes the restore possible at all.
+#[test]
+fn the_bin_stamps_rows_and_only_a_purge_removes_them() {
+    let mut h = Harness::new("org-bin");
+
+    let note = h.ok(r#"{"op":"orgAddNote","body":"进回收站"}"#)["org"]["notes"][0]["id"]
+        .as_u64()
+        .unwrap();
+    // A new row is born live: `deletedAt` is absent, which is how the Kotlin side
+    // reads "not binned".
+    h.ok(r#"{"op":"orgAddNote","body":"留下"}"#);
+
+    // The 🗑 bins it: still in the catalog, stamped.
+    let view = h.ok(&format!(r#"{{"op":"orgDeleteNote","note":{note}}}"#));
+    assert_eq!(view["org"]["notes"].as_array().unwrap().len(), 2, "the row is still there");
+    let binned = view["org"]["notes"].as_array().unwrap().iter().find(|n| n["id"] == note).unwrap();
+    assert!(!binned["deletedAt"].is_null(), "the 🗑 stamped it");
+
+    // 恢复: the stamp goes away again.
+    let view = h.ok(&format!(r#"{{"op":"orgRestoreNote","note":{note}}}"#));
+    let row = view["org"]["notes"].as_array().unwrap().iter().find(|n| n["id"] == note).unwrap();
+    assert!(row["deletedAt"].is_null(), "restored rows are live again");
+
+    // 彻底删除: the row leaves the catalog, and one 撤销 brings it back.
+    let view = h.ok(&format!(r#"{{"op":"orgPurgeNote","note":{note}}}"#));
+    assert_eq!(view["org"]["notes"].as_array().unwrap().len(), 1);
+    let view = h.ok(r#"{"op":"orgUndo"}"#);
+    assert_eq!(view["org"]["notes"].as_array().unwrap().len(), 2);
+
+    // 清空回收站: bin both, then empty. The whole emptying is one step, so one
+    // 撤销 refills the bin — the rule a batched delete already kept.
+    let other = view["org"]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] != note)
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    h.ok(&format!(r#"{{"op":"orgDeleteNote","note":{note}}}"#));
+    let view = h.ok(&format!(r#"{{"op":"orgDeleteNote","note":{other}}}"#));
+    assert!(view["org"]["notes"].as_array().unwrap().iter().all(|n| !n["deletedAt"].is_null()));
+    let view = h.ok(r#"{"op":"orgEmptyBin","task":false}"#);
+    assert!(view["org"]["notes"].as_array().unwrap().is_empty());
+    let view = h.ok(r#"{"op":"orgUndo"}"#);
+    assert_eq!(view["org"]["notes"].as_array().unwrap().len(), 2, "one 撤销 refills the bin");
+    assert!(view["org"]["notes"].as_array().unwrap().iter().all(|n| !n["deletedAt"].is_null()));
+}
+
 /// The editor sheet sets a note's text and its tags together, for the reason the
 /// create does: one sheet produced both, and two commands would be two 撤销.
 #[test]

@@ -158,6 +158,28 @@ The three the desktop shell had and this one did not, all shell-side: no
       never be swallowed by a startup notice
 - [x] `OrgModelTest` +6 (59 JVM tests total), and the dead `orgNote*` wrappers removed
 
+## M2.97 · 回收站 — ✅
+
+The gap this repository's README has carried since M2 ("a real 回收站 needs soft
+delete in `quire-core` — a column, the store, the merge"), done on all three repos
+together (ADR-0020, core ADR-0003). Core lands first and this shell pins the rev.
+
+- [x] A delete is a **stamp**: the 🗑 and the selection bar's 删除 write `deletedAt`
+      (the bridge's `orgDeleteNote` / `orgDeleteTask` now route to `trash_note` /
+      `trash_task`), so a delete is reversible twice over — the 撤销 bar, and the bin
+- [x] 回收站 as a **mode of the page**: the overflow's 回收站/离开回收站 flips
+      `orgBin`, the title says which one is showing, and each binned card's ⋯ carries
+      **恢复** and **彻底删除**; the overflow's 清空回收站 purges the whole half as
+      **one** space on the undo stack
+- [x] Every list-shaped projection moved to the live half of the catalog, and
+      `OrgModel` grew `binNotes` / `binTasks` / `binCounts`; a binned reply leaves its
+      thread and a binned task leaves its list's chip count
+- [x] The search box applies to the bin and the smart views / list chips / tag row do
+      not (picking one closes it); 多选 leaves with it
+- [x] 指令's `delete` means *bin* and a new `restore` action is its mirror
+- [x] `OrgModelTest` +3 (65 JVM tests), the bridge's `session_test` +1, and the rev
+      `4899857 → fbfdaca` with **snapshot version 2 → 3**
+
 ## Next (not started)
 
 Slices in the order they are worth doing, each one a vertical cut the way M1 and
