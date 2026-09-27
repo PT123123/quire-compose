@@ -1,12 +1,15 @@
 package dev.quire.compose.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -35,7 +39,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.quire.compose.QuireViewModel
 import dev.quire.compose.bridge.BlockRow
@@ -135,16 +143,65 @@ fun PageMenuSheet(
     }
 }
 
+/** One swatch of the theme picker: a ramp, an ink and a label. */
+private data class SwatchEntry(
+    val id: String,
+    val label: String,
+    val top: Color,
+    val bottom: Color,
+    val ink: Color,
+)
+
+/**
+ * One theme swatch. The card paints the palette's own page ramp and writes its
+ * name in the palette's own ink, so the grid is a preview rather than a legend —
+ * the same construction as AW's Android picker and the desktop's `ThemeCard`.
+ */
+@Composable
+private fun ThemeSwatch(
+    entry: SwatchEntry,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val colors = LocalQuireColors.current
+    val shape = RoundedCornerShape(Radius.md)
+    Box(
+        modifier = modifier
+            .height(56.dp)
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(entry.top, entry.bottom)))
+            .border(
+                width = if (active) 2.dp else 1.dp,
+                color = if (active) colors.accent else colors.border,
+                shape = shape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = entry.label,
+            style = QuireType.caption,
+            color = entry.ink,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 6.dp),
+        )
+    }
+}
+
 /** Settings: global switches, kept off the main surface on purpose. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
     val colors = LocalQuireColors.current
-    val themes = listOf(
-        "system" to "跟随系统",
-        "light" to "浅色",
-        "dark" to "深色",
-    )
+    // The ramp `system` currently resolves to, so its own swatch is a live
+    // preview like every other one rather than a placeholder.
+    val resolved = LocalThemePalette.current
+    val entries = listOf(
+        SwatchEntry("system", "跟随系统", resolved.bg, resolved.grad2, resolved.fg),
+    ) + ThemeCatalog.map {
+        SwatchEntry(it.id, it.emoji + " " + it.name, it.bg, it.grad2, it.fg)
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -158,12 +215,28 @@ fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
                 .padding(bottom = 16.dp),
         ) {
             SheetHeader("外观")
-            for ((value, label) in themes) {
-                SheetItem(
-                    label = label,
-                    selected = view.theme == value,
-                    onClick = { vm.setTheme(value) },
-                )
+            // AW's twelve themes, preceded by the one id that is not a palette
+            // (跟随系统). Chunked into rows of three rather than laid out with
+            // the experimental `FlowRow`: the count is data, the sheet has a
+            // fixed width, and the arithmetic keeps a trailing row's swatches
+            // the same size as the full rows'.
+            for (row in entries.chunked(3)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for (entry in row) {
+                        ThemeSwatch(
+                            entry = entry,
+                            active = view.theme == entry.id,
+                            modifier = Modifier.weight(1f),
+                            onClick = { vm.setTheme(entry.id) },
+                        )
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
             }
 
             HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))

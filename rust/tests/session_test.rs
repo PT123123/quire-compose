@@ -219,14 +219,24 @@ fn favorites_and_the_theme_are_persisted() {
         .as_u64()
         .unwrap();
     h.ok(&format!(r#"{{"op":"toggleFavorite","page":{page}}}"#));
-    let view = h.ok(r#"{"op":"setTheme","theme":"dark"}"#);
-    assert_eq!(view["theme"], "dark");
+    let view = h.ok(r#"{"op":"setTheme","theme":"graphite"}"#);
+    assert_eq!(view["theme"], "graphite");
     h.ok(r#"{"op":"flush"}"#);
 
     h.reopen();
     let view = h.view();
-    assert_eq!(view["theme"], "dark");
+    assert_eq!(view["theme"], "graphite");
     assert_eq!(view["favorites"][0].as_u64(), Some(page));
+}
+
+#[test]
+fn the_pre_catalog_theme_spelling_still_resolves() {
+    // A library last written by a shell from before the catalog holds "dark";
+    // both shells read that row, so it must be rewritten to a catalog id rather
+    // than rejected.
+    let mut h = Harness::new("legacy-theme");
+    let view = h.ok(r#"{"op":"setTheme","theme":"dark"}"#);
+    assert_eq!(view["theme"], "midnight");
 }
 
 #[test]

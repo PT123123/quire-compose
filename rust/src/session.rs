@@ -36,6 +36,32 @@ use crate::org::Organizer;
 use crate::view::{self, View};
 use crate::workspace::{PageRec, Workspace, MAX_RECENTS};
 
+/// The theme ids the shell can paint: AW's catalog (`aw-qtui/src/theme.h`'s
+/// `kThemes[]`, ported to `ui/Theme.kt` here and `ui/Colors.slint` on the
+/// desktop) plus `system`, which resolves against the device's colour scheme.
+/// The two shells read the same `theme` row out of `quire.db`, so this list and
+/// the desktop's must agree. `dark`, the pre-catalog spelling of `midnight`, is
+/// the one id handled outside this list — see `set_theme`.
+const THEME_IDS: [&str; 13] = [
+    "midnight",
+    "graphite",
+    "violet",
+    "emerald",
+    "amber",
+    "ocean",
+    "rose",
+    "light",
+    "jade",
+    "deepblue",
+    "twilight",
+    "crimson",
+    "system",
+];
+
+/// What a library with no `theme` row opens in. `midnight` is AW's own default
+/// and the entry `resolveTheme` falls back to, so the two cannot disagree.
+const DEFAULT_THEME: &str = "midnight";
+
 /// `meta`'s key for the recently-opened list. The desktop shell writes the same
 /// key with the same comma-separated shape, so a library carried between shells
 /// offers the same recents.
@@ -425,7 +451,7 @@ impl Session {
 
         let ws = Workspace::from_persisted(&state.pages);
         let (settings, meta) = Settings::from_state(&state);
-        let theme = settings.theme().unwrap_or("system").to_string();
+        let theme = settings.theme().unwrap_or(DEFAULT_THEME).to_string();
         let recents = parse_recents(meta.get(META_RECENTS), &ws);
         // Open where the user left off, falling back to the first page in tree
         // order: a client that opens on nothing looks broken.
@@ -504,7 +530,7 @@ impl Session {
         self.ws = Workspace::from_persisted(&state.pages);
         let (settings, meta) = Settings::from_state(&state);
         self.settings = settings;
-        self.theme = self.settings.theme().unwrap_or("system").to_string();
+        self.theme = self.settings.theme().unwrap_or(DEFAULT_THEME).to_string();
         self.recents = parse_recents(meta.get(META_RECENTS), &self.ws);
         self.active = self
             .active
@@ -1034,10 +1060,24 @@ impl Session {
         Ok(Outcome::Full)
     }
 
+    /// Accept a theme id and persist it.
+    ///
+    /// The ids are AW's catalog (`aw-qtui/src/theme.h`'s `kThemes[]`), which
+    /// both shells port: `ui/Theme.kt` here and `ui/Colors.slint` on the
+    /// desktop. `system` is not a palette — it resolves against the device's
+    /// colour scheme at paint time — but it is a value the settings row can
+    /// hold, so it is accepted like the rest.
+    ///
+    /// `dark` is the pre-catalog spelling of `midnight`. An older shell wrote
+    /// it into the shared `quire.db`, and both shells read that same row, so it
+    /// is rewritten rather than rejected: a library that was left dark must not
+    /// snap to the default just because the catalog arrived.
     fn set_theme(&mut self, theme: &str) -> Result<Outcome, String> {
-        if !matches!(theme, "light" | "dark" | "system") {
-            return Err(format!("unknown theme: {theme}"));
-        }
+        let theme = match theme {
+            "dark" => "midnight",
+            other if THEME_IDS.contains(&other) => other,
+            other => return Err(format!("unknown theme: {other}")),
+        };
         self.settings.set_theme(theme);
         self.theme = theme.to_string();
         self.record(vec![Change::SettingSet {

@@ -180,6 +180,38 @@ together (ADR-0020, core ADR-0003). Core lands first and this shell pins the rev
 - [x] `OrgModelTest` +3 (65 JVM tests), the bridge's `session_test` +1, and the rev
       `4899857 → fbfdaca` with **snapshot version 2 → 3**
 
+## M2.98 · AW's theme catalog — ✅
+
+Twelve palettes instead of two (`ADR-0021`). `ui/Theme.kt` gains `ThemePalette` +
+`ThemeCatalog` — `aw-qtui/src/theme.h`'s `kThemes[]`, field for field, the same
+twelve the desktop shell ports into `ui/Colors.slint` — and `QuireColors` becomes
+*derived* from one row (`colorsFor`), following the desktop's derivation token for
+token so the two shells cannot drift. Four rows carry a page ramp; the other nine
+set `grad2 == bg`, so `pageBrush`'s single `Brush.verticalGradient` draws both
+kinds. The window is painted on it (`QuireApp`'s `Box`, `Scaffold` transparent) and
+the top bars keep `colors.background`, which is where the desktop puts it too.
+
+Settings' 外观 stops being three text rows (跟随系统/浅色/深色) and becomes a swatch
+grid: `ThemeSwatch` paints each palette's own ramp in its own ink, so the grid is a
+preview rather than a legend — AW's own Android picker construction.
+
+The stored value is an **id both shells know**, because they read the same `theme`
+row out of the same `quire.db`: the bridge's `set_theme` validates against the
+catalog plus `system` instead of `light|dark|system`, and `dark` — what the
+previous shell wrote — is rewritten to `midnight` rather than rejected. A library
+with no `theme` row now opens in `midnight` (the desktop's default) rather than
+following the system; 跟随系统 is still there, one card over, and resolves to
+`midnight`/`light`.
+
+**Verified**: `cargo test --manifest-path rust/Cargo.toml` 44 green (18 bridge + 26
+session, incl. the new `the_pre_catalog_theme_spelling_still_resolves`), and
+`just check` green end to end — `:app:testDebugUnitTest :app:assembleDebug`.
+
+**Not verified (honest)**: the grid on a real device (no emulator here — the same
+gap every UI slice in this shell carries); and the twelve palettes' callout /
+mention tints are legible by construction (`lerp` against the theme's own `bg`),
+not by measurement — this shell has no contrast probe.
+
 ## Next (not started)
 
 Slices in the order they are worth doing, each one a vertical cut the way M1 and

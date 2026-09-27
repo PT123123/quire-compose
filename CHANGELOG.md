@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased — AW's theme catalog
+
+The desktop shell adopted ActivityWatch's theme table and this shell follows, so
+the two agree about what a theme *is* (ADR-0021). Both shells read the same
+`theme` row out of the same `quire.db`, so the ids — not the colours — are the
+contract.
+
+### Twelve palettes, chosen by name
+
+- `ui/Theme.kt` gains `ThemePalette` + `ThemeCatalog`: `aw-qtui/src/theme.h`'s
+  `kThemes[]`, field for field — 暗夜蓝 midnight (default) / 石墨灰 graphite /
+  紫罗兰 violet / 森林绿 emerald / 琥珀暖 amber / 海洋青 ocean / 珊瑚红 rose /
+  明亮 light, plus the four gradient themes 翡翠绿 jade / 深空蓝 deepblue /
+  暮光紫 twilight / 荣艳红 crimson.
+- `QuireColors` is no longer two instances but *derived* from one catalog row
+  (`colorsFor`), following the desktop's `ui/Colors.slint` derivation token for
+  token so the two shells cannot drift.
+
+### The window is a ramp
+
+- The four gradient themes paint a vertical ramp behind everything (`pageBrush` in
+  `QuireApp`), with the `Scaffold` and the page bodies transparent so it is one
+  surface rather than one per pane; the nine flat themes set `grad2 == bg`, so one
+  rule draws both kinds. The top bars keep `colors.background`, which is where the
+  desktop's title bar sits too.
+
+### Settings
+
+- 外观 is a swatch grid instead of three text rows: each card paints its own ramp
+  in its own ink, so the grid is a preview rather than a legend — AW's own Android
+  picker construction.
+- **跟随系统** survives, narrowed: it is no longer the default and no longer a
+  palette of its own — one card that resolves to `midnight` or `light`.
+- A library with no `theme` row now opens in `midnight` (the desktop's default)
+  rather than following the system.
+
+### Also
+
+- The bridge's `set_theme` validates against the catalog instead of
+  `light|dark|system`, and the pre-catalog spelling `dark` is rewritten to
+  `midnight` rather than rejected — a library left dark by the previous build does
+  not snap to the default. New test:
+  `the_pre_catalog_theme_spelling_still_resolves`.
+
 ## Unreleased — 回收站
 
 The gap this README has named since the organizer landed ("a real 回收站 needs soft

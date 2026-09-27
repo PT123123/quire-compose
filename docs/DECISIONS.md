@@ -4,6 +4,58 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0021 · The palette is ActivityWatch's twelve, chosen by name, and the window is a ramp
+
+Decision: this shell stops having two palettes and starts having a catalog.
+`ui/Theme.kt` gains `ThemePalette` and `ThemeCatalog` — the twelve rows of
+`activitywatch/aw-qtui/src/theme.h`'s `kThemes[]`, field for field, and the same
+twelve the desktop shell ports into `ui/Colors.slint` — and `QuireColors` becomes
+*derived* from one row by `colorsFor`, following the desktop's derivation token
+for token (`textSecondary = lerp(fg, fgMuted, 0.55)`, `accentSoft`/`accentText`
+= tints of the accent over the theme's own page, `borderStrong = lerp(border, fg,
+0.14)`, …). Four rows (`jade`, `deepblue`, `twilight`, `crimson`) carry a page
+ramp; the other nine set `grad2 == bg`, so one `Brush.verticalGradient` draws both
+kinds.
+
+The window is painted on that ramp: `QuireApp` wraps everything in
+`Box(background = pageBrush(palette))`, the `Scaffold` goes
+`containerColor = Color.Transparent`, and the page bodies draw no fill of their
+own. The top bars keep `colors.background`, exactly as the desktop's title bar
+does, so the two shells put the ramp in the same place.
+
+`system` stays, and is now the *only* id that is not a palette: `resolveTheme`
+maps it to `midnight` or `light` from `isSystemInDarkTheme()`. Settings' three
+text rows (跟随系统/浅色/深色) become a swatch grid — `ThemeSwatch` paints each
+palette's own ramp in its own ink, so the grid is a preview rather than a legend,
+which is the construction AW's own Android picker uses.
+
+Context: the desktop shell is a port of ActivityWatch and this shell is the
+desktop's sibling, so when the desktop adopted AW's theme table ("照搬 AW 多主题
+系统", 双端都要) this shell had to get the same table or the two would disagree
+about what "dark" means. They read the *same* `theme` row out of the same
+`quire.db`, so a theme picked on the phone is the theme the desktop opens in —
+which is also why the ids, not the colours, are the contract.
+
+Consequences:
+
+- **The stored value is an id both shells know.** `set_theme` in the bridge
+  validates against the catalog plus `system` instead of `light|dark|system`, and
+  `dark` — what the previous shell wrote — is rewritten to `midnight` rather than
+  rejected, so a library left dark does not snap to the default. A library with
+  no `theme` row now opens in `midnight` rather than following the system.
+- **跟随系统 survives, narrowed.** It was the default; it is now a choice, and it
+  resolves to `midnight`/`light` rather than being a palette of its own. Matching
+  the desktop, which resolves the same id the same way.
+- **One ramp, one surface.** The `Scaffold` being transparent is what makes the
+  gradient themes continuous; without it each screen's fill would restart the ramp
+  and the four themes would show a seam per pane.
+- **Nothing else changed.** Every screen already read
+  `LocalQuireColors.current`, so the catalog reaches all of them through the same
+  composition local — `ADR-0015`'s instant capture overlay included.
+- **`LocalThemePalette` exists** so a caller can paint a ramp it did not compute;
+  the settings sheet uses it to preview 跟随系统 with the palette it currently
+  resolves to.
+
 ## ADR-0020 · 回收站 is a mode of the page, and a delete is a stamp
 
 Decision: this shell has a **回收站** (core ADR-0003). The overflow's 回收站 item

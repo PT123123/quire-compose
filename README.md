@@ -148,8 +148,12 @@ either of the other two destinations rather than leaving the app.
   undoable step).
 - **Its own undo and redo.** The organizer has a stack of its own
   (`core::ORGANIZER_STACK`), so a 撤销 in 收件箱 can never reach a page's edits.
-- Light and dark themes in the shell's own palette, `跟随系统` by default, in
-  Settings rather than on the main screen.
+- **Twelve themes**, ActivityWatch's own catalog (`aw-qtui/src/theme.h`'s
+  `kThemes[]`, the same twelve the desktop shell ports into `ui/Colors.slint`), so a
+  theme picked here is the theme the desktop opens in — both read the same `theme`
+  row out of the same `quire.db`. Four of them carry a vertical page ramp; the rest
+  are flat. Chosen from a swatch grid in Settings rather than on the main screen,
+  with 跟随系统 as one card among them.
 - Everything above is persisted through `quire-core`'s change stream, debounced
   the way the other shells debounce it.
 

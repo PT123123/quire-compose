@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,12 +62,22 @@ import kotlinx.coroutines.launch
 fun QuireApp(vm: QuireViewModel) {
     QuireTheme(theme = vm.view?.theme ?: "system") {
         val colors = LocalQuireColors.current
-        Surface(modifier = Modifier.fillMaxSize(), color = colors.background) {
-            val view = vm.view
-            if (view == null) {
-                StartupScreen(error = vm.error)
-            } else {
-                Shell(view = view, vm = vm)
+        val palette = LocalThemePalette.current
+        // The window is painted on the theme's own ramp (`Colors.page` on the
+        // desktop). The Scaffold and the page bodies stay transparent so the
+        // ramp is one surface rather than one per pane, which is what makes the
+        // four gradient themes continuous; the top bars keep `colors.background`
+        // exactly as the desktop's title bar does.
+        Box(modifier = Modifier.fillMaxSize().background(pageBrush(palette))) {
+            // Transparent: the Surface is here for its content colour and the
+            // ripple/semantics plumbing, not for a fill.
+            Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
+                val view = vm.view
+                if (view == null) {
+                    StartupScreen(error = vm.error)
+                } else {
+                    Shell(view = view, vm = vm)
+                }
             }
         }
     }
@@ -219,7 +230,8 @@ private fun Shell(view: View, vm: QuireViewModel) {
         },
     ) {
         Scaffold(
-            containerColor = colors.background,
+            // Transparent so the window's ramp shows through the page body.
+            containerColor = Color.Transparent,
             snackbarHost = {
                 // Lifted clear of the ＋: a bar over the button that opens capture
                 // would hide the one control the inbox is built around.

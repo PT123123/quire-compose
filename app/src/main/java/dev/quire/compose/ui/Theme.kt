@@ -7,7 +7,9 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -15,14 +17,182 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * The palette, ported from the desktop shell's `ui/Colors.slint` — the same
- * near-white/warm-neutral light theme and the same "never pure black" dark one,
- * so a page opened on the phone looks like the page opened on the desktop.
+ * One row of ActivityWatch's theme table — `aw-qtui/src/theme.h`'s `kThemes[]`,
+ * field for field with the desktop shell's `ThemePalette` in `ui/Colors.slint`.
+ * The two shells are ports of the same table, so a theme picked on the phone is
+ * the theme the desktop opens in (they share the `theme` row in `quire.db`).
+ */
+data class ThemePalette(
+    val id: String,
+    val name: String,
+    val emoji: String,
+    val light: Boolean,
+    val bg: Color,
+    val bgElev: Color,
+    val bgElev2: Color,
+    val border: Color,
+    val fg: Color,
+    val fgMuted: Color,
+    val accent: Color,
+    val danger: Color,
+    val ok: Color,
+    /**
+     * The second stop of the page ramp. Equal to [bg] for the nine flat themes,
+     * which is what lets one `Brush.verticalGradient` draw both kinds — the
+     * same trick the desktop's `Colors.page` uses.
+     */
+    val grad2: Color,
+)
+
+/** AW's twelve themes, in `kThemes[]` order. `midnight` is AW's default and ours. */
+val ThemeCatalog: List<ThemePalette> = listOf(
+    ThemePalette(
+        id = "midnight", name = "暗夜蓝", emoji = "🌙", light = false,
+        bg = Color(0xFF1A1D21), bgElev = Color(0xFF22262C), bgElev2 = Color(0xFF2A2F37),
+        border = Color(0xFF343A44), fg = Color(0xFFE6E6E6), fgMuted = Color(0xFF9AA4B0),
+        accent = Color(0xFF4C8BF5), danger = Color(0xFFE5534B), ok = Color(0xFF3FB950),
+        grad2 = Color(0xFF1A1D21),
+    ),
+    ThemePalette(
+        id = "graphite", name = "石墨灰", emoji = "🪨", light = false,
+        bg = Color(0xFF161B22), bgElev = Color(0xFF1F242C), bgElev2 = Color(0xFF282E36),
+        border = Color(0xFF363D46), fg = Color(0xFFE6EDF3), fgMuted = Color(0xFF8B949E),
+        accent = Color(0xFF2F81F7), danger = Color(0xFFF85149), ok = Color(0xFF3FB950),
+        grad2 = Color(0xFF161B22),
+    ),
+    ThemePalette(
+        id = "violet", name = "紫罗兰", emoji = "💜", light = false,
+        bg = Color(0xFF17151F), bgElev = Color(0xFF211E2D), bgElev2 = Color(0xFF2B2738),
+        border = Color(0xFF3A3550), fg = Color(0xFFE8E6F0), fgMuted = Color(0xFF9D97B5),
+        accent = Color(0xFFA78BFA), danger = Color(0xFFF87171), ok = Color(0xFF34D399),
+        grad2 = Color(0xFF17151F),
+    ),
+    ThemePalette(
+        id = "emerald", name = "森林绿", emoji = "🌲", light = false,
+        bg = Color(0xFF0F1A16), bgElev = Color(0xFF16241E), bgElev2 = Color(0xFF1D2F27),
+        border = Color(0xFF2A4238), fg = Color(0xFFE2EFE7), fgMuted = Color(0xFF93B3A4),
+        accent = Color(0xFF34D399), danger = Color(0xFFF87171), ok = Color(0xFF22C55E),
+        grad2 = Color(0xFF0F1A16),
+    ),
+    ThemePalette(
+        id = "amber", name = "琥珀暖", emoji = "🔥", light = false,
+        bg = Color(0xFF1C1712), bgElev = Color(0xFF241D16), bgElev2 = Color(0xFF2E251B),
+        border = Color(0xFF45392A), fg = Color(0xFFF0E6D6), fgMuted = Color(0xFFB8A68A),
+        accent = Color(0xFFF59E0B), danger = Color(0xFFF87171), ok = Color(0xFF34D399),
+        grad2 = Color(0xFF1C1712),
+    ),
+    ThemePalette(
+        id = "ocean", name = "海洋青", emoji = "🌊", light = false,
+        bg = Color(0xFF0B1A22), bgElev = Color(0xFF10222C), bgElev2 = Color(0xFF16303C),
+        border = Color(0xFF20404F), fg = Color(0xFFD8EEF7), fgMuted = Color(0xFF86B3C4),
+        accent = Color(0xFF22D3EE), danger = Color(0xFFFB7185), ok = Color(0xFF2DD4BF),
+        grad2 = Color(0xFF0B1A22),
+    ),
+    ThemePalette(
+        id = "rose", name = "珊瑚红", emoji = "🌹", light = false,
+        bg = Color(0xFF1A1216), bgElev = Color(0xFF221820), bgElev2 = Color(0xFF2C2029),
+        border = Color(0xFF43313A), fg = Color(0xFFF0E4E9), fgMuted = Color(0xFFBB9FA9),
+        accent = Color(0xFFFB7185), danger = Color(0xFFF43F5E), ok = Color(0xFF34D399),
+        grad2 = Color(0xFF1A1216),
+    ),
+    ThemePalette(
+        id = "light", name = "明亮", emoji = "☀️", light = true,
+        bg = Color(0xFFF5F6F8), bgElev = Color(0xFFFFFFFF), bgElev2 = Color(0xFFECEFF3),
+        border = Color(0xFFD9DEE5), fg = Color(0xFF24292F), fgMuted = Color(0xFF6B7280),
+        accent = Color(0xFF2F6FED), danger = Color(0xFFD13438), ok = Color(0xFF1A7F37),
+        grad2 = Color(0xFFF5F6F8),
+    ),
+    // ---- the four gradient themes: `bg` is the top stop, `grad2` the bottom ----
+    ThemePalette(
+        id = "jade", name = "翡翠绿", emoji = "💎", light = false,
+        bg = Color(0xFF0F4938), bgElev = Color(0xFF143F35), bgElev2 = Color(0xFF1B4F43),
+        border = Color(0xFF2A4F46), fg = Color(0xFFE6EEF0), fgMuted = Color(0xFF8FA8A6),
+        accent = Color(0xFF34D399), danger = Color(0xFFF87171), ok = Color(0xFF22C55E),
+        grad2 = Color(0xFF0A2442),
+    ),
+    ThemePalette(
+        id = "deepblue", name = "深空蓝", emoji = "🌌", light = false,
+        bg = Color(0xFF0D2A49), bgElev = Color(0xFF112F4E), bgElev2 = Color(0xFF173B5F),
+        border = Color(0xFF1E3A57), fg = Color(0xFFE3ECF5), fgMuted = Color(0xFF8AA3BD),
+        accent = Color(0xFF38BDF8), danger = Color(0xFFF87171), ok = Color(0xFF34D399),
+        grad2 = Color(0xFF060F1E),
+    ),
+    ThemePalette(
+        id = "twilight", name = "暮光紫", emoji = "🌆", light = false,
+        bg = Color(0xFF2B1D45), bgElev = Color(0xFF312250), bgElev2 = Color(0xFF3A2A63),
+        border = Color(0xFF413566), fg = Color(0xFFECE8F5), fgMuted = Color(0xFFA395C4),
+        accent = Color(0xFFC084FC), danger = Color(0xFFF87171), ok = Color(0xFF34D399),
+        grad2 = Color(0xFF120A24),
+    ),
+    ThemePalette(
+        id = "crimson", name = "荣艳红", emoji = "🌺", light = false,
+        bg = Color(0xFF471524), bgElev = Color(0xFF4C1A2A), bgElev2 = Color(0xFF5C2235),
+        border = Color(0xFF5C2E3E), fg = Color(0xFFF5E8EC), fgMuted = Color(0xFFC09AA6),
+        accent = Color(0xFFF87171), danger = Color(0xFFE11D48), ok = Color(0xFF34D399),
+        grad2 = Color(0xFF1C0B14),
+    ),
+)
+
+private val ById: Map<String, ThemePalette> = ThemeCatalog.associateBy { it.id }
+
+/** The catalog row for [id]; anything unknown falls back to `midnight`. */
+fun themeById(id: String): ThemePalette = ById[id] ?: ById.getValue("midnight")
+
+/**
+ * The row a stored id resolves to. `system` follows the device; `dark` is the
+ * pre-catalog spelling of midnight — an older shell wrote it into the shared
+ * `quire.db`, so it still resolves rather than snapping to the default.
+ */
+fun resolveTheme(id: String, systemDark: Boolean): ThemePalette = when (id) {
+    "system", "" -> if (systemDark) themeById("midnight") else themeById("light")
+    "dark" -> themeById("midnight")
+    else -> themeById(id)
+}
+
+/**
+ * The semantic palette the whole UI reads, derived from one catalog row. This is
+ * the Kotlin half of `ui/Colors.slint`'s derivation and follows it token for
+ * token: `accent-soft`/`accent-text` are tints of the theme's own accent over
+ * its own page rather than AW's separate `tagBg`/`tagFg` pair, because quire
+ * spends them on callout bodies and mention chips where the text on top is the
+ * primary ink — deriving from [ThemePalette.bg] keeps every theme legible there
+ * by construction.
+ */
+fun colorsFor(p: ThemePalette): QuireColors = QuireColors(
+    background = p.bg,
+    sidebar = p.bgElev,
+    surface = p.bgElev,
+    surfaceHover = p.bgElev2,
+    surfaceSelected = lerp(p.bgElev2, p.accent, 0.22f),
+    card = if (p.light) Color(0x0F000000) else Color(0x14FFFFFF),
+    cardBorder = if (p.light) Color(0x14000000) else Color(0x1FFFFFFF),
+    codeBackground = lerp(p.bg, Color.Black, if (p.light) 0.03f else 0.35f),
+    textPrimary = p.fg,
+    textSecondary = lerp(p.fg, p.fgMuted, 0.55f),
+    textMuted = p.fgMuted,
+    border = p.border,
+    borderStrong = lerp(p.border, p.fg, 0.14f),
+    divider = p.border,
+    accent = p.accent,
+    accentSoft = lerp(p.accent, p.bg, 0.84f),
+    accentText = if (p.light) lerp(p.accent, Color.Black, 0.25f)
+    else lerp(p.accent, Color.White, 0.30f),
+    danger = p.danger,
+    calloutBackground = lerp(p.accent, p.bg, 0.84f),
+    scrim = if (p.light) Color(0x59000000) else Color(0x8C000000),
+    isDark = !p.light,
+)
+
+/**
+ * The palette, ported from the desktop shell's `ui/Colors.slint` — both are
+ * derived from the same ActivityWatch table, so a page opened on the phone looks
+ * like the page opened on the desktop.
  *
  * Ported rather than re-invented for a reason beyond consistency: those values
- * are *measured*, not chosen. The muted tier is the lightest text in the app and
- * sits at 4.43:1 on white; the block swatches were re-tuned so an orange block
- * on its own tint clears 3:1. Retyping them by eye would throw that away.
+ * are *measured*, not chosen. The block swatches were re-tuned so an orange
+ * block on its own tint clears 3:1, and `cover-scrim`'s alpha is arithmetic
+ * (`ADR-0023`, `ADR-0047` on the desktop side). Retyping them by eye would throw
+ * that away.
  */
 data class QuireColors(
     val background: Color,
@@ -55,55 +225,19 @@ data class QuireColors(
     val isDark: Boolean,
 )
 
-private val LightColors = QuireColors(
-    background = Color(0xFFFFFFFF),
-    sidebar = Color(0xFFF6F6F4),
-    surface = Color(0xFFFFFFFF),
-    surfaceHover = Color(0xFFEFEFEC),
-    surfaceSelected = Color(0xFFE8E8E4),
-    card = Color(0x0F000000),
-    cardBorder = Color(0x14000000),
-    codeBackground = Color(0xFFF6F6F4),
-    textPrimary = Color(0xFF1F2328),
-    textSecondary = Color(0xFF5F6569),
-    textMuted = Color(0xFF75787D),
-    border = Color(0xFFEBEBEA),
-    borderStrong = Color(0xFFD9D9D6),
-    divider = Color(0xFFE2E2DF),
-    accent = Color(0xFF5B54D6),
-    accentSoft = Color(0xFFEEEEFF),
-    accentText = Color(0xFF4A44B0),
-    danger = Color(0xFFD9412E),
-    calloutBackground = Color(0xFFEEEEFF),
-    scrim = Color(0x59000000),
-    isDark = false,
-)
+val LocalQuireColors = staticCompositionLocalOf { colorsFor(themeById("midnight")) }
 
-private val DarkColors = QuireColors(
-    background = Color(0xFF1A1A1E),
-    sidebar = Color(0xFF16161A),
-    surface = Color(0xFF1F1F24),
-    surfaceHover = Color(0xFF26262C),
-    surfaceSelected = Color(0xFF2D2D34),
-    card = Color(0x14FFFFFF),
-    cardBorder = Color(0x1FFFFFFF),
-    codeBackground = Color(0xFF101014),
-    textPrimary = Color(0xFFE7E7EA),
-    textSecondary = Color(0xFFB4B4BB),
-    textMuted = Color(0xFF7D7D86),
-    border = Color(0xFF2B2B31),
-    borderStrong = Color(0xFF3B3B43),
-    divider = Color(0xFF34343B),
-    accent = Color(0xFF8F87F0),
-    accentSoft = Color(0xFF2A2945),
-    accentText = Color(0xFFA8A2F5),
-    danger = Color(0xFFF0776C),
-    calloutBackground = Color(0xFF2A2945),
-    scrim = Color(0x8C000000),
-    isDark = true,
-)
+/** The catalog row [QuireTheme] resolved, so a caller can paint its ramp. */
+val LocalThemePalette = staticCompositionLocalOf { themeById("midnight") }
 
-val LocalQuireColors = staticCompositionLocalOf { LightColors }
+/**
+ * The page ramp, the Kotlin twin of `Colors.slint`'s `Colors.page`: the four
+ * gradient themes paint [ThemePalette.bg] into [ThemePalette.grad2], and the
+ * nine flat ones hand back a ramp whose two stops are equal — which draws flat.
+ * One rule for both kinds, and one surface for the whole window, so the ramp is
+ * continuous behind the chrome instead of restarting per pane.
+ */
+fun pageBrush(p: ThemePalette): Brush = Brush.verticalGradient(listOf(p.bg, p.grad2))
 
 /** Spacing ladder — the only allowed steps, same numbers as `Theme.slint`. */
 object Spacing {
@@ -173,17 +307,14 @@ fun blockBackgroundColor(slot: Int, dark: Boolean): Color = when (slot) {
 /**
  * Wrap the app in the palette.
  *
- * @param theme the stored setting: `system` follows the device (the platform's
- *   own convention, and the default), `light` and `dark` pin it.
+ * @param theme the stored setting: an id from [ThemeCatalog], or `system` to
+ *   follow the device. Resolution lives in [resolveTheme].
  */
 @Composable
 fun QuireTheme(theme: String, content: @Composable () -> Unit) {
-    val dark = when (theme) {
-        "dark" -> true
-        "light" -> false
-        else -> isSystemInDarkTheme()
-    }
-    val colors = if (dark) DarkColors else LightColors
+    val palette = resolveTheme(theme, isSystemInDarkTheme())
+    val colors = colorsFor(palette)
+    val dark = colors.isDark
 
     // Material3 still draws the primitives we borrow (Checkbox, Switch, dialogs,
     // the sheets), so the palette has to reach it too or a checkbox would be
@@ -216,7 +347,10 @@ fun QuireTheme(theme: String, content: @Composable () -> Unit) {
         )
     }
 
-    CompositionLocalProvider(LocalQuireColors provides colors) {
+    CompositionLocalProvider(
+        LocalQuireColors provides colors,
+        LocalThemePalette provides palette,
+    ) {
         MaterialTheme(colorScheme = scheme, content = content)
     }
 }
