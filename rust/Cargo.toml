@@ -25,10 +25,11 @@ crate-type = ["cdylib", "rlib"]
 # 引用 (`notes.ref_note`, core ADR-0001): notes and tasks are merged by their 唯一 ID
 # with the row's revision as the arbiter. `SNAPSHOT_VERSION` is now 4, so this pin
 # moves together with the desktop's — a device left behind refuses to sync rather
-# than half-understanding. Bump it only once that commit is on `origin`: a shell
-# cannot build against an unpublished commit, so the core lands and is pushed first
-# and the pin follows.
-quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "d4cad517bc468f8d0bc73ab2085d1cf183d251fb" }
+# than half-understanding. It also drops the by-hand "add by address" door
+# (`Cmd::ProbeAdd`), which this shell no longer offers. Bump it only once that
+# commit is on `origin`: a shell cannot build against an unpublished commit, so the
+# core lands and is pushed first and the pin follows.
+quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "5a6b103103d399368e93cd77df9011f050af80ea" }
 jni = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

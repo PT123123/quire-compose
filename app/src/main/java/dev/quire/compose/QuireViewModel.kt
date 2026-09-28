@@ -867,8 +867,6 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun syncSetName(name: String) = act { bridge.syncSetName(name) }
 
-    fun syncAddPeer(ip: String, port: Int = 0) = act { bridge.syncAddPeer(ip, port) }
-
     fun syncPair(id: String) = act { bridge.syncPair(id) }
 
     fun syncNow(id: String) = act { bridge.syncNow(id) }

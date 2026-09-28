@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased — 平板联调：push 的身份、以及去掉「按地址添加」
+
+Two things a real two-device round found (ADR-0027, ADR-0028).
+
+### push 快照现在写明是本机推的
+
+- **A round against a desktop no longer ends in `push answered 409`.** The merged
+  snapshot this shell answers with — which is also what it *pushes* — kept the
+  identity of whoever sent it to us (`merge` carries the remote's `device_id`
+  forward), so the desktop was told it had pushed to *itself*, did not find that id
+  in its own peer book, and refused with 409. The data converged anyway (the pull
+  half had landed, and the desktop's own rounds pull), so the cost was the round's
+  report and the scary line on the 同步 page — which is exactly why it took two
+  real devices to find. Found by pairing a real tablet with a desktop on the same
+  LAN; the unit tests drive `sync_apply_remote` and never look at the identity it
+  returns
+
+### 去掉「按地址添加」
+
+- **Devices are found on the LAN; there is no field to type an address into.** The
+  按地址添加 row and its 配对 button are gone, and `Cmd::ProbeAdd` is gone from
+  `quire-core`. A device appears in 已发现的设备 because its announcement was heard
+  and is paired from that row. The row existed because broadcast reception is not
+  guaranteed on Android (no multicast lock), which made "discovery heard nothing" a
+  state the user could work around instead of one worth fixing — and it asked for
+  the address of a device the user is holding. A network that filters broadcasts now
+  leaves the list empty, which is the honest answer; bringing the door back is a row
+  and a command if it ever matters
+
 ## Unreleased — 笔记与任务按 唯一 ID 合并，revision 说了算
 
 The organizer's half of the sync, ported to the reference app's rule (core ADR-0004,

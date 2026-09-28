@@ -595,27 +595,9 @@ impl Session {
             .find(|p| p.id == peer_id)
             .ok_or_else(|| format!("没有这个设备: {peer_id}"))?;
         if peer.ip.is_empty() {
-            return Err("这个设备还没有地址 —— 用「按地址添加」再试".to_string());
+            return Err("这个设备还没有地址 —— 等它下一次广播再试".to_string());
         }
         self.sync_send(Cmd::PairWith(peer))
-    }
-
-    /// A device typed in by hand: for a network where the announcement cannot
-    /// get through. The engine asks it who it is and pairs on the answer.
-    pub(crate) fn sync_add_peer(&mut self, ip: &str, port: u16) -> Result<(), String> {
-        let ip = ip.trim().to_string();
-        if ip.is_empty() {
-            return Err("请填一个地址".to_string());
-        }
-        // `192.168.1.20:5878` is what a user copies off the other device's page,
-        // so the port may arrive inside the address.
-        let (ip, port) = match ip.rsplit_once(':') {
-            Some((host, tail)) if tail.parse::<u16>().is_ok() => {
-                (host.to_string(), tail.parse::<u16>().unwrap_or(SYNC_PORT))
-            }
-            _ => (ip, if port == 0 { SYNC_PORT } else { port }),
-        };
-        self.sync_send(Cmd::ProbeAdd { ip, port })
     }
 
     pub(crate) fn sync_forget_peer(&mut self, peer_id: &str) -> Result<(), String> {
@@ -974,6 +956,21 @@ impl Session {
         // Rebuild what is in memory from what is now in the file, and drop the
         // undo stacks: their entries name rows the merge may have replaced.
         self.reload_in_memory()?;
+
+        // The merged snapshot becomes **this** device's when it is pushed back: the
+        // peer keys its shadow by the sender's identity, and the sender of that push
+        // is us.
+        //
+        // Without this the body still names whoever sent *us* the snapshot — the
+        // desktop's id, because `merge` carries the remote's identity forward — so
+        // the desktop receives a push from *itself*, does not find that id in its own
+        // peer book, and answers 409. The pull half of the round has already landed by
+        // then, so the data converges and the only visible symptom is a failed round
+        // on the 同步 page; the desktop's own apply restamps for exactly this reason.
+        let me = self.sync_self_info();
+        let mut merged = merged;
+        merged.device_id = me.id;
+        merged.device = me.name;
         Ok(merged)
     }
 }

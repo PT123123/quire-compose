@@ -121,7 +121,7 @@ where it was (ADR-0016).
 
 - [x] A fourth destination, `ui/Sync.kt`: the discovery banner, 本机 address and
       id, 已配对 / 已发现 device lists with 在线·离线 and 上次同步, 立即同步 /
-      忘记 / 发起配对, 按地址添加, the interval presets, 本机别名, the log tail
+      忘记 / 发起配对, the interval presets, 本机别名, the log tail
 - [x] `rust/src/sync.rs`: the two halves the core leaves to a shell — the snapshot
       out of the workspace, and a merged snapshot back in (`replace_all` for the
       document, row `Change`s for the organizer, then reload in memory)

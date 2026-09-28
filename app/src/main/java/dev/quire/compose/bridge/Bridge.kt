@@ -244,10 +244,7 @@ class Bridge(private val handle: Long) {
 
     fun syncSetName(name: String): Reply = send("syncSetName", "name" to name)
 
-    /** `192.168.1.20` or `192.168.1.20:5878` — the by-hand door onto the LAN. */
-    fun syncAddPeer(ip: String, port: Int): Reply =
-        send("syncAddPeer", "ip" to ip, "port" to port)
-
+    /** Pair with a device already heard on the wire. */
     fun syncPair(id: String): Reply = send("syncPair", "id" to id)
 
     fun syncNow(id: String): Reply = send("syncNow", "id" to id)

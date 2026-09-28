@@ -4,6 +4,51 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0028 · Devices are found on the LAN, and there is no by-hand address
+
+Decision: the 按地址添加 row and its 配对 button are gone from the 同步 page, and
+`Cmd::ProbeAdd` / `probe_add` are gone from `quire-core`. A device appears in
+**已发现的设备** because its announcement was heard, and is paired from that row;
+that is the only door onto the LAN.
+
+Context: the row was there because UDP broadcast reception is not guaranteed on
+every Android device (there is no multicast lock) — a network that filters
+broadcasts left the list empty and the only way forward was to type the other
+device's address. It worked, and it made the app ask the user a question the
+network should have answered: the address of a device they are holding in their
+other hand. It also hid a real failure — with the door present, "discovery did not
+hear anything" is a state the user can work around instead of a state worth
+fixing, which is how it stays broken.
+
+Consequences: on a LAN where announcements do not arrive, this shell now offers no
+way to sync, and the honest answer is the list being empty rather than a field.
+Bringing the door back is a row and a command, not a redesign, if that turns out
+to matter; the alternative that was weighed and not taken is keeping the row but
+filing it under 设置 as an advanced door, which keeps the workaround without
+advertising it as the normal path.
+
+## ADR-0027 · The merged snapshot this shell pushes names this device
+
+Decision: `sync_apply_remote` stamps this device's identity over the merged
+snapshot before answering with it (`merged.device_id = me.id; merged.device =
+me.name`), exactly as the desktop shell's apply already did.
+
+Context: `merge` carries the *remote* snapshot's identity forward — the merged
+document is a description of the peer's library plus ours, so its `device_id`
+stays whoever sent it to us. That value is fine on the way in and wrong on the way
+out: the answer to a pull is also what this shell **pushes**, and the desktop's
+server refuses a push whose sender is not in its peer book. The result was a
+visible, recurring failure on the 同步 page — `push answered 409: TEST-DESKTOP
+推送了快照但未配对 — 已拒绝` — because the desktop was being told it had pushed to
+itself. The data still converged (the pull half had already landed, and the
+desktop's own rounds pull), so this cost the round's *report*, not its content;
+that is exactly why it took a real two-device run to find.
+
+Consequences: both directions now report success, and the shadow this shell stores
+names the same device the peer will see in the push. Found by pairing a real
+tablet with a desktop on the same LAN, not by a test: the unit tests drive
+`sync_apply_remote` and never look at the identity it returns.
+
 ## ADR-0026 · The organizer holds this device's id, and its funnel stamps the revision
 
 Decision: `Organizer` gains a `device: String` (set by the session once at `open` and
@@ -484,7 +529,7 @@ Consequences:
 ## ADR-0016 · 同步 is a destination, and a library this build cannot carry refuses to sync at all
 
 Decision: LAN sync gets a **page** — a fourth drawer row, `ui/Sync.kt` — over
-`quire-core`'s own protocol (HTTP 5878, UDP discovery 5879, the version-2
+`quire-core`'s own protocol (HTTP 5878, UDP discovery 5879, the version-4
 snapshot, the three-way merge). The shell supplies the two halves the core leaves
 out (`sync_export` / `sync_apply_remote`, `rust/src/sync.rs`), the peer book and
 the log are the same `settings` rows the other shells use, and the engine is
@@ -492,8 +537,7 @@ started **by opening the page** — nothing listens until 同步 has been shown.
 
 The page carries what this protocol actually has: a discovery banner, this
 device's address and id, **已配对的设备** with 在线/离线, 上次同步 and 立即同步 /
-忘记, **已发现的设备** with 发起配对, 按地址添加 for a network where the
-announcement cannot get through, the interval presets (10 秒 / 1 分 / 5 分 / 30 分 /
+忘记, **已发现的设备** with 发起配对, the interval presets (10 秒 / 1 分 / 5 分 / 30 分 /
 仅手动), 本机别名, and the last dozen log lines. It is the reference app's own page
 narrowed to this protocol: that app's 同步 hub also has pairing codes, per-device
 statistics, conflict lists, a permission/keep-alive page, D1 cloud sync, cloud
@@ -535,8 +579,10 @@ Consequences:
   rather than reserved from the session, and the reload walks every in-memory
   watermark past what it loaded — so nothing minted next can collide.
 - `INTERNET` is the only manifest permission (it was already there, reserved for
-  this). UDP broadcast reception is not guaranteed on every Android device, which
-  is why 按地址添加 exists; there is no multicast lock and no keep-alive page.
+  this). UDP broadcast reception is not guaranteed on every Android device and
+  there is no multicast lock, so discovery is best-effort: a network that filters
+  broadcasts leaves 已发现的设备 empty, and there is deliberately no by-hand
+  address to fall back on (ADR-0028).
 - Not here, and named so they are not mistaken for oversights: the read-only LAN
   **share** (port 5877, `quire-core`'s other LAN module), conflict lists,
   per-device statistics, pairing codes, and the cloud/backup/WiFi-transfer

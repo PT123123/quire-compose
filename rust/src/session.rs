@@ -369,14 +369,6 @@ pub enum Request {
         #[serde(default)]
         id: String,
     },
-    /// `192.168.1.20` or `192.168.1.20:5878` — the door for a network where the
-    /// announcement cannot get through.
-    SyncAddPeer {
-        #[serde(default)]
-        ip: String,
-        #[serde(default)]
-        port: u16,
-    },
     SyncNow {
         #[serde(default)]
         id: String,
@@ -839,11 +831,6 @@ impl Session {
             }
             Request::SyncPair { id } => {
                 self.sync_pair(&id)?;
-                Ok(Outcome::Full)
-            }
-            Request::SyncAddPeer { ip, port } => {
-                self.sync_ensure()?;
-                self.sync_add_peer(&ip, port)?;
                 Ok(Outcome::Full)
             }
             Request::SyncNow { id } => {

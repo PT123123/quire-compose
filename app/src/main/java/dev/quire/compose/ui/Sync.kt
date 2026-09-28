@@ -46,7 +46,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -119,7 +118,6 @@ fun SyncPage(vm: QuireViewModel) {
     // idempotent on the Rust side, so coming back to the page is free.
     LaunchedEffect(Unit) { vm.openSync() }
 
-    var address by remember { mutableStateOf("") }
     var name by remember(sync.selfName) { mutableStateOf(sync.selfName) }
 
     LazyColumn(
@@ -148,16 +146,6 @@ fun SyncPage(vm: QuireViewModel) {
         }
         items(sync.discovered, key = { "found-${it.id}" }) { row -> SyncDevice(row = row, vm = vm) }
 
-        item(key = "add") {
-            SyncAdd(
-                value = address,
-                onValueChange = { address = it },
-                onSubmit = {
-                    vm.syncAddPeer(address)
-                    address = ""
-                },
-            )
-        }
         item(key = "settings") {
             SyncSettings(
                 sync = sync,
@@ -366,30 +354,6 @@ private fun SyncBadge(label: String, tint: androidx.compose.ui.graphics.Color) {
             .padding(horizontal = 5.dp, vertical = 1.dp),
         maxLines = 1,
     )
-}
-
-/** 按地址添加: the door for a network where the announcement cannot get through. */
-@Composable
-private fun SyncAdd(value: String, onValueChange: (String) -> Unit, onSubmit: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-    ) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            singleLine = true,
-            label = { Text("按地址添加", style = QuireType.caption) },
-            placeholder = { Text("192.168.1.20 或 192.168.1.20:${5878}", style = QuireType.caption) },
-            textStyle = QuireType.ui,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, keyboardType = KeyboardType.Uri),
-            modifier = Modifier.weight(1f),
-        )
-        TextButton(onClick = onSubmit, enabled = value.isNotBlank()) { Text("配对") }
-    }
 }
 
 /** 设置: the timer, and what this device is called on the wire. */

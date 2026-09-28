@@ -2,9 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- LAN sync (`quire-core`'s own protocol, port 5878 / discovery 5879) and,
-         later, the read-only LAN share. No manifest permission covers UDP
-         broadcast reception on every device, so 同步 also offers 按地址添加: a
-         peer typed in by address, which needs no announcement at all. -->
+         later, the read-only LAN share. The permission is all this shell can ask
+         for: no manifest permission covers UDP broadcast reception, and there is
+         no multicast lock, so discovery is best-effort — a network that filters
+         broadcasts leaves 已发现的设备 empty rather than offering a by-hand door. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application

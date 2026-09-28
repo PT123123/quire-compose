@@ -159,11 +159,11 @@ either of the other two destinations rather than leaving the app.
   the way the other shells debounce it.
 
 **同步**, a fourth page: LAN sync over `quire-core`'s own protocol (HTTP 5878, UDP
-discovery 5879, snapshot v2, a three-way merge against a per-peer shadow).
+discovery 5879, the version-4 snapshot, a three-way merge against a per-peer shadow).
 
 - The device list: this device's alias and address, **已配对的设备** with 在线/离线
-  and 上次同步, **已发现的设备** with 发起配对, and 按地址添加 for a network where
-  the announcement cannot get through.
+  and 上次同步, and **已发现的设备** with 发起配对. Devices are found by the
+  engine's broadcast and paired from their row — there is no by-hand address.
 - 立即同步 and 忘记 per device; 10 秒 / 1 分 / 5 分 / 30 分 / 仅手动 for the interval;
   the last dozen log lines.
 - **Opening the page is what puts this device on the LAN** — the engine's threads
