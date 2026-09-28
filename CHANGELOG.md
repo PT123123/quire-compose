@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased — 收件箱与任务的「刷新」，一次跟所有设备同步
+
+### 「刷新」= 一次跟每台已配对设备的同步
+
+- **收件箱 and 任务 both carry a `Refresh` icon that starts one round with every
+  paired device, right now** (ADR-0029). It is a sync round, not a reload of the
+  local list — a list that is correct but missing a note from another device looks
+  identical to one that was never refreshed, and the round is the only thing that
+  makes it complete. It goes with *every* device rather than a named one: the press
+  means 「我的笔记不在这里」, and which device has it is not a question asked at that
+  moment. Drawn only when a paired device exists
+- Which devices one round dials is now one function
+  (`Session::peers_due_for_a_round`), shared with the auto-sync timer, so a
+  hand-started round and a background one cannot disagree about who is reachable.
+  A paired device that is not currently on the network is **named in the status
+  line as skipped** rather than silently dropped
+- The icon turns into a spinner while a round is in flight, matching the 同步
+  page's own bar — 「正在同步」 looks the same in both places
+- A round that lands re-projects 收件箱 and 任务 as it always did: this shell's
+  `sync_pump` already rebuilds the whole catalog into every `Outcome::Full`
+  reply, so the desktop's missing `org_refresh` had no counterpart to fix here
+  (desktop ADR-0127 records that half)
+
 ## Unreleased — 平板联调：push 的身份、以及去掉「按地址添加」
 
 Two things a real two-device round found (ADR-0027, ADR-0028).

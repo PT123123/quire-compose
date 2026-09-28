@@ -787,3 +787,47 @@ fn a_locked_page_does_not_lock_the_organizer() {
     assert_eq!(h.note()["title"], "写着呢");
 }
 
+/// **「刷新」with nothing to sync with says so, and says it in the user's words.**
+///
+/// The 刷新 icon in 收件箱 and 任务 (ADR-0029) is a round with *every* paired
+/// device, so a library with no paired device is the case it hits first — the
+/// button is not even drawn then, but the request is reachable and must not be a
+/// panic or an empty success. The error is the half that matters: a 刷新 that
+/// reported "ok" while syncing with nobody is a round that looks like it worked.
+#[test]
+fn a_refresh_with_no_paired_device_says_why_instead_of_pretending() {
+    let mut h = Harness::new("sync-refresh-empty");
+    // syncState first, the way the 同步 page does, so the engine is running and
+    // the failure below is about the peers rather than about the engine.
+    h.ok(r#"{"op":"syncState"}"#);
+    let error = h.err(r#"{"op":"syncNowAll"}"#);
+    assert!(
+        error.contains("还没有配对任何设备"),
+        "the press should be told what is missing, got: {error}"
+    );
+}
+
+/// **`syncNowAll` is reachable from a session that never opened the 同步 page.**
+///
+/// The 刷新 button lives in the organizer, so it is the one sync request that can
+/// arrive on a session whose engine has never been started — a desktop-side
+/// `sync_now` has the same shape, and compose's `sync_ensure` is what makes the
+/// difference. Two things are pinned here, both invisible from a screen that
+/// happens to have opened that page: the op *spelling* (`syncNowAll`, from
+/// serde's camelCase — a typo is a button that silently does nothing, since an
+/// unknown op is refused rather than crashing), and that reaching it starts the
+/// engine rather than failing on "同步还没启动".
+#[test]
+fn the_refresh_op_is_spelled_the_way_the_button_sends_it() {
+    let mut h = Harness::new("sync-refresh-op");
+    // No syncState first: the button lives in the organizer, so this is the
+    // shape it actually arrives in.
+    let error = h.err(r#"{"op":"syncNowAll"}"#);
+    assert!(
+        !error.contains("unknown op") && !error.contains("同步还没启动"),
+        "the op must be reached and the engine started for us, got: {error}"
+    );
+    // …and the engine it started is still a working one: the 同步 page opens.
+    h.ok(r#"{"op":"syncState"}"#);
+}
+

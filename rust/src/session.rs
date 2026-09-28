@@ -373,6 +373,16 @@ pub enum Request {
         #[serde(default)]
         id: String,
     },
+    /// A round with every paired device, not one. The 刷新 button in 笔记 and
+    /// 任务 sends this; there is no per-peer argument because there is no one
+    /// peer the user is asking about — the point of pressing it is that a note
+    /// is missing and any of the devices could have it.
+    ///
+    /// `sync_ensure` runs first, unlike `SyncNow`: the button lives in the
+    /// organizer, not on the 同步 page, so a session that has never opened that
+    /// page has never started the engine, and without this the button's round
+    /// would go to a channel nobody is reading.
+    SyncNowAll,
     SyncForget {
         #[serde(default)]
         id: String,
@@ -835,6 +845,10 @@ impl Session {
             }
             Request::SyncNow { id } => {
                 self.sync_now(&id)?;
+                Ok(Outcome::Full)
+            }
+            Request::SyncNowAll => {
+                self.sync_now_all()?;
                 Ok(Outcome::Full)
             }
             Request::SyncForget { id } => {

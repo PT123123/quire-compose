@@ -47,9 +47,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -101,6 +103,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.quire.compose.QuireViewModel
 import dev.quire.compose.bridge.OrgCatalog
+import dev.quire.compose.bridge.SyncState
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -236,6 +239,7 @@ fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
         onSearch = vm::toggleOrgSearch,
         onSort = { sortOpen = true },
         onMenu = { menuOpen = true },
+        extra = { OrgRefreshAction(vm) },
     )
     if (sortOpen) {
         OrgSortSheet(
@@ -325,6 +329,7 @@ fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
         onSearch = vm::toggleOrgSearch,
         onSort = { sortOpen = true },
         onMenu = { menuOpen = true },
+        extra = { OrgRefreshAction(vm) },
     )
     if (sortOpen) {
         OrgSortSheet(
@@ -343,6 +348,47 @@ fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
     }
     if (commandsOpen) {
         OrgCommandDialog(isTask = true, vm = vm, onDismiss = { commandsOpen = false })
+    }
+}
+
+/**
+ * 刷新: a round with every paired device, right now.
+ *
+ * It is on the bar rather than only on the 同步 page because that is where a
+ * note is read *and* written — a row that arrived from another device while you
+ * were looking at the list is the moment the button is worth pressing, and
+ * making that a trip to another page is how a stale list stays stale.
+ *
+ * It is `vm.syncNowAll` and not `vm.syncNow(somePeer)` because there is no one
+ * peer the user has in mind: the press means "a note of mine is not here", and
+ * which of the devices has it is the question they did not ask. The desktop's
+ * 刷新 is the same round against the same rule.
+ *
+ * Drawn only with a paired peer to dial ([SyncState.peers] is paired, excluding
+ * this device) — a button whose only possible answer is "还没有配对任何设备" is
+ * a button in the way, and the 同步 page is where pairing happens. A round in
+ * flight turns the glyph into a spinner: the same treatment the 同步 page's own
+ * bar gives, so "it is working" looks the same in both places.
+ */
+@Composable
+private fun OrgRefreshAction(vm: QuireViewModel) {
+    val colors = LocalQuireColors.current
+    val sync = vm.view?.sync ?: SyncState.Empty
+    if (sync.peers.isEmpty()) return
+    IconButton(onClick = vm::syncNowAll, enabled = !sync.busy) {
+        if (sync.busy) {
+            CircularProgressIndicator(
+                color = colors.accent,
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(18.dp),
+            )
+        } else {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = "刷新并立即同步",
+                tint = colors.textSecondary,
+            )
+        }
     }
 }
 

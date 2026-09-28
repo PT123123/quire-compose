@@ -871,6 +871,17 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun syncNow(id: String) = act { bridge.syncNow(id) }
 
+    /**
+     * The 刷新 in 笔记 and 任务: one round with every paired device.
+     *
+     * [refresh] rather than [syncNow] is the *intent* here — the user pressed a
+     * button that says "my note is not here, go get it", and which of the two
+     * peers happened to have it is not a question they asked. A per-peer
+     * `syncNow` would put that choice back on them at the moment they least
+     * want it.
+     */
+    fun syncNowAll() = act { bridge.syncNowAll() }
+
     fun syncForget(id: String) = act { bridge.syncForget(id) }
 
     // ─── the deferred delete ────────────────────────────────────────────────

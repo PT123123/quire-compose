@@ -4,6 +4,55 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0029 · 收件箱 and 任务 carry a 刷新, and it is a round with every device
+
+Decision: both organizer bars get a `Refresh` icon that starts **one round with
+every paired device** — not a reload of the local list, and not a round with one
+named peer. `Request::SyncNowAll` → `Session::sync_now_all()` is the new
+no-argument door; `Bridge.syncNowAll()` and `QuireViewModel.syncNowAll()` carry
+it to the screen. The per-peer `syncNow` stays, for the 同步 page's 立即同步 row,
+where a named device is exactly what is being asked about.
+
+The target rule moved out of the auto-sync timer into
+`Session::peers_due_for_a_round`, and the timer now calls it — so a hand-started
+round and a background one can never disagree about who is reachable. This
+shell's version carries two filters the desktop has no need of (`p.id != me`,
+`!p.ip.is_empty()`), and unlike the desktop's it **returns the paired peers it
+had to skip, by name**.
+
+Context: the request was 弄个刷新功能，刷新同时绑定同步. The "同时绑定同步" is the
+whole of it — reloading a list that is correct but incomplete is
+indistinguishable from not reloading, and the round is the only thing that makes
+it complete. A per-peer round is the wrong shape: the press means "a note of mine
+is not here", and which of the devices has it is a question the user did not
+ask. A per-peer round is also a per-peer failure, which is the wrong thing to
+hand someone holding a phone that has been asleep and is only just back on the
+LAN.
+
+Consequences:
+
+- The icon is drawn only when `SyncState.peers` is non-empty. A 刷新 whose only
+  possible answer is "还没有配对任何设备" is a button in the way, and pairing
+  happens on the 同步 page.
+- `sync_now_all` calls `sync_ensure()` first, which `sync_now` does not. The
+  button lives in the organizer, not on the 同步 page, and a session that has
+  never opened that page has never started the engine — so without it the round
+  would be sent to a channel nobody is reading. This is a real consequence of
+  moving the door off the 同步 page, and it is why the two are not the same
+  function.
+- A round in flight swaps the glyph for a spinner, matching the 同步 page's own
+  bar, so "it is working" looks the same in both places — which is the point of
+  having it in two.
+- A paired-but-offline device is named in the status line as skipped. The timer
+  still skips it silently — nobody is waiting on a tick — but a hand-started
+  round that quietly sat a device out is the round that looks like it worked.
+- Not done, and deliberately: a 刷新 on the 页面 area. Pages already re-project on
+  the same `ApplyRemote` path the organizer uses, and the document surface is
+  not where stale data was the complaint. The weighed alternative — pull-to-
+  refresh on the organizer lists, as the reference app has it — costs a gesture
+  recogniser that fights the lists' own scroll, and a phone is a place where a
+  missed note is expensive enough to spend a permanent icon on.
+
 ## ADR-0028 · Devices are found on the LAN, and there is no by-hand address
 
 Decision: the 按地址添加 row and its 配对 button are gone from the 同步 page, and

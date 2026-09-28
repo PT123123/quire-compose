@@ -249,6 +249,13 @@ class Bridge(private val handle: Long) {
 
     fun syncNow(id: String): Reply = send("syncNow", "id" to id)
 
+    /**
+     * A round with every paired device, right now — the 刷新 in 笔记 and 任务.
+     * No argument because there is no one peer being asked about, and the bridge
+     * starts the engine if this session has never opened the 同步 page.
+     */
+    fun syncNowAll(): Reply = send("syncNowAll")
+
     fun syncForget(id: String): Reply = send("syncForget", "id" to id)
 
     /** Flush and free the native session. After this the handle is dead. */

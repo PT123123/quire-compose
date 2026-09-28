@@ -587,6 +587,79 @@ impl Session {
         self.sync_send(Cmd::SyncWith(peer))
     }
 
+    /// A round with every paired device that is still on the network — the
+    /// 刷新 button in 笔记 and 任务.
+    ///
+    /// The same list the auto-sync timer dials, on purpose: a hand-started round
+    /// and a background one that disagree about who is reachable is how a user
+    /// presses 刷新 and watches one of their devices quietly sit it out. Four
+    /// things have to hold for a peer to be a target, and each is a way a round
+    /// would otherwise fail rather than be skipped:
+    ///
+    /// * paired — a discovered device is not a sync target. The round would run
+    ///   and the other side would drop the push (an unpaired push is refused on
+    ///   sight), and the peer table would end up claiming a pairing nobody made.
+    /// * not this device — a record is its own peer in some tables, and dialling
+    ///   yourself is a round that times out.
+    /// * an address — nothing to dial without one; the device announces again in
+    ///   4 s and the next round finds it.
+    /// * announcing recently — one that stopped announcing has stopped listening
+    ///   too, and `RECENT_ENOUGH_SECS` is the same window the page draws as 在线.
+    ///
+    /// Returns the targets and, separately, the paired peers that were left out
+    /// by name. The timer drops those silently: nobody is waiting on a tick. The
+    /// button cannot — the press asked for *this* round, and a round that
+    /// quietly skipped a device is the one that looks like it worked.
+    pub(crate) fn peers_due_for_a_round(&self) -> (Vec<PeerRecord>, Vec<String>) {
+        let now = quire_core::services::sync::engine::now_unix();
+        let me = self.sync_self_info().id;
+        let mut targets = Vec::new();
+        let mut absent = Vec::new();
+        for peer in self.sync_peers().into_iter().filter(|p| p.paired) {
+            let reachable = peer.id != me
+                && !peer.ip.is_empty()
+                && now.saturating_sub(peer.last_seen) < RECENT_ENOUGH_SECS;
+            if reachable {
+                targets.push(peer);
+            } else {
+                absent.push(if peer.name.is_empty() { peer.id } else { peer.name });
+            }
+        }
+        (targets, absent)
+    }
+
+    pub(crate) fn sync_now_all(&mut self) -> Result<(), String> {
+        self.sync_ensure()?;
+        let (targets, absent) = self.peers_due_for_a_round();
+        if targets.is_empty() {
+            return Err(if absent.is_empty() {
+                "还没有配对任何设备 — 先在「同步」里配对一台。".to_string()
+            } else {
+                format!("{} 不在本网络上 — 它重新广播后就会自动同步。", absent.join("、"))
+            });
+        }
+        self.sync.as_mut().map(|s| s.busy = true);
+        let names: Vec<String> = targets
+            .iter()
+            .map(|p| if p.name.is_empty() { p.id.clone() } else { p.name.clone() })
+            .collect();
+        for p in targets {
+            self.sync_send(Cmd::SyncWith(p))?;
+        }
+        if let Some(s) = self.sync.as_mut() {
+            s.status = if absent.is_empty() {
+                format!("正在与 {} 同步…", names.join("、"))
+            } else {
+                format!(
+                    "正在与 {} 同步…（{} 不在本网络上，已跳过）",
+                    names.join("、"),
+                    absent.join("、")
+                )
+            };
+        }
+        Ok(())
+    }
+
     /// Pair with a device that was discovered but has not been paired yet.
     pub(crate) fn sync_pair(&mut self, peer_id: &str) -> Result<(), String> {
         let peer = self
@@ -762,17 +835,7 @@ impl Session {
             if let Some(s) = self.sync.as_mut() {
                 s.last_auto = now;
             }
-            let me = self.sync_self_info().id;
-            let peers: Vec<PeerRecord> = self
-                .sync_peers()
-                .into_iter()
-                .filter(|p| {
-                    p.paired
-                        && p.id != me
-                        && !p.ip.is_empty()
-                        && now.saturating_sub(p.last_seen) < RECENT_ENOUGH_SECS
-                })
-                .collect();
+            let (peers, _absent) = self.peers_due_for_a_round();
             if !peers.is_empty() {
                 if let Some(s) = self.sync.as_mut() {
                     s.busy = true;
