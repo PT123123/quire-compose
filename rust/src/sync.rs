@@ -1293,12 +1293,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A conflict the merge settled in this device's favour is **said out loud**.
+    /// A conflict — both sides edited one row — is **said out loud**, whichever
+    /// copy the revision settles on.
     ///
-    /// Both sides edited the same row, so the local copy won and the peer's was
-    /// dropped — and without a line in the log nothing on the 同步 page could
-    /// explain why the two devices disagree about that row. This is the shell's
-    /// version of the reference app's 冲突 list.
+    /// The line is the only thing that can explain a row the other device shows
+    /// differently: the merge picks a winner deterministically (core ADR-0004), so
+    /// the two ends agree afterwards, but nothing else on the 同步 page would say
+    /// that a write happened here and is no longer the one displayed. It is this
+    /// shell's version of the reference app's 冲突 list. Here the local edit is the
+    /// *later* one, so it is the copy that stands — which is the revision's answer,
+    /// not a preference for the local side.
     #[test]
     fn a_merge_conflict_is_written_to_the_sync_log() {
         let dir = scratch("conflict-log");
@@ -1316,8 +1320,9 @@ mod tests {
         for note in &mut remote.notes {
             note.body = "对端改的".into();
         }
-        // …and so did this device, after the shadow was taken: an edit against an
-        // edit is the one shape the merge cannot settle by itself.
+        // …and so did this device, after the shadow was taken: two concurrent
+        // writes to one row are the shape the merge has to settle by the revision,
+        // and this device's is the later one.
         let id = local.notes[0].id;
         session.dispatch(&format!(
             r#"{{"op":"orgNoteContent","note":{id},"body":"本机改的","tags":""}}"#
