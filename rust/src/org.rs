@@ -68,6 +68,10 @@ pub struct Organizer {
     next_list: u64,
     can_undo: bool,
     can_redo: bool,
+    /// This device's id, which every write stamps into the row's **revision**
+    /// (`quire_core::core::organizer::rev`). Handed over by the session, because
+    /// the id lives in a `settings` row and the catalog does not read settings.
+    device: String,
 }
 
 impl Organizer {
@@ -115,7 +119,28 @@ impl Organizer {
             next_list,
             can_undo: false,
             can_redo: false,
+            device: String::new(),
         }
+    }
+
+    /// This device's id, as the session handed it over. Empty only before the
+    /// session sets it, which is one statement after the load.
+    pub fn device(&self) -> &str {
+        &self.device
+    }
+
+    pub fn set_device(&mut self, device: &str) {
+        self.device = device.to_string();
+    }
+
+    /// The revision a write made *now* carries: the wall clock in milliseconds and
+    /// this device's id, the pair the merge orders two copies of one row by
+    /// (`quire_core::core::organizer::rev`). Read per write rather than cached, so
+    /// two writes in the same millisecond still differ by the device half — and a
+    /// single device's two writes never tie with each other, because the clock half
+    /// moves.
+    fn rev(&self) -> String {
+        quire_core::core::organizer::rev(now_millis(), &self.device)
     }
 
     pub fn catalog(&self) -> &OrganizerCatalog {
@@ -141,6 +166,7 @@ impl Organizer {
         hist: &mut History,
         cmd: Command,
     ) -> Option<Vec<Change>> {
+        let cmd = self.stamped(cmd);
         let changes = command::exec(doc, hist, ORGANIZER_STACK, cmd)?;
         self.absorb(&changes);
         self.can_undo = true;
@@ -157,11 +183,27 @@ impl Organizer {
         hist: &mut History,
         cmds: Vec<Command>,
     ) -> Option<Vec<Change>> {
+        let cmds: Vec<Command> = cmds.into_iter().map(|cmd| self.stamped(cmd)).collect();
         let changes = command::exec_all(doc, hist, ORGANIZER_STACK, cmds)?;
         self.absorb(&changes);
         self.can_undo = true;
         self.can_redo = false;
         Some(changes)
+    }
+
+    /// Stamp the revision of every row a command is about to write.
+    ///
+    /// **The two funnels above are the only place a write can be stamped**, and
+    /// that is what makes them worth having: the ＋, a field on blur, 指令's batch,
+    /// a restore and the tasks a deleted list moves all arrive here, so one call
+    /// covers them and no call site has to remember.
+    ///
+    /// Stamped on the way **in**, so the history entry keeps the *old* revision in
+    /// its revert and one 撤销 puts the row back looking as old as it was — a
+    /// reverted row that read as the newer write would be undone again by the peer.
+    fn stamped(&self, mut cmd: Command) -> Command {
+        cmd.stamp_rev(&self.rev());
+        cmd
     }
 
     /// Apply one batch of AI instructions (SPEC §四十一's 指令) to one half of the
@@ -364,6 +406,9 @@ impl Organizer {
             // Born live, like every new row: the bin is what a *delete* puts a row
             // into, and a row nobody has deleted is not there.
             deleted_at: None,
+            // The revision is the funnel's to write, not this builder's: the row is
+            // about to go through `apply`, which stamps it.
+            rev: String::new(),
         };
         let changes = self
             .apply(doc, hist, Command::CreateNote { note })
@@ -614,6 +659,7 @@ impl Organizer {
             ord,
             // Born live; see `add_note`.
             deleted_at: None,
+            rev: String::new(), // the funnel stamps it
         };
         let changes = self
             .apply(doc, hist, Command::CreateTask { task })
@@ -1092,6 +1138,20 @@ pub fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Now, as unix **milliseconds**, for the row's revision — [`Organizer::rev`].
+///
+/// Finer than [`now_secs`] on purpose, and the finer unit is the point: the revision
+/// is what a merge orders two copies of one row by, and a whole second of ambiguity
+/// is exactly what a second-resolution stamp leaves. This is the wall clock and
+/// nothing else: a revision outlives the session and has to mean the same thing to
+/// the peer that reads it.
+pub fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// One instruction as the command it means, or the reason it cannot be one.
 fn command_of(
     sim: &mut OrganizerCatalog,
@@ -1131,6 +1191,7 @@ fn note_command_of(
             edited: now,
             ref_note: None,
             deleted_at: None,
+            rev: String::new(), // the funnel stamps it
         };
         *next += 1;
         sim.notes.push(note.clone());
@@ -1184,6 +1245,7 @@ fn note_command_of(
                 edited: now,
                 ref_note: Some(id),
                 deleted_at: None,
+                rev: String::new(), // the funnel stamps it
             };
             *next += 1;
             sim.notes.push(comment.clone());
@@ -1246,6 +1308,7 @@ fn task_command_of(
             edited: now,
             ord,
             deleted_at: None,
+            rev: String::new(), // the funnel stamps it
         };
         *next += 1;
         sim.tasks.push(task.clone());
@@ -1579,6 +1642,7 @@ mod tests {
             edited: 0,
             ref_note: None,
             deleted_at: None,
+            rev: String::new(),
         });
         let payload: serde_json::Value = serde_json::from_str(&format!(
             r#"{{"operations":[
@@ -1654,6 +1718,7 @@ mod tests {
                 edited: 0,
                 ref_note: None,
                 deleted_at: None,
+                rev: String::new(),
             }],
             lists: vec![TaskList {
                 id: ListId(3),
@@ -1684,11 +1749,60 @@ mod tests {
                 edited: 0,
                 ord: OrderKey::FIRST,
                 deleted_at: None,
+                rev: String::new(),
             }],
         });
         assert_eq!(organizer.next_note, 8);
         assert_eq!(organizer.next_task, 100);
         assert_eq!(organizer.next_list, 4);
+    }
+
+    /// The funnel stamps every command's written row with this device's **revision**
+    /// — the (`millis`, `device`) pair SPEC §四十一's merge orders two copies of one
+    /// row by — and never with the `before` half, which the revert writes back.
+    ///
+    /// Both halves matter, and the second one is the subtle one: an undo that moved
+    /// the revision forward would leave the row looking newer than the edit it
+    /// undid, so the peer would take the undone value back on the next round.
+    #[test]
+    fn the_funnel_stamps_the_written_row_and_never_the_before_half() {
+        let mut organizer = Organizer::from_catalog(OrganizerCatalog::default());
+        organizer.set_device("phone");
+
+        let live = Note {
+            id: NoteId(1),
+            uuid: "a".repeat(32),
+            title: String::new(),
+            body: "x".into(),
+            pinned: false,
+            tags: Vec::new(),
+            created: 0,
+            edited: 0,
+            ref_note: None,
+            deleted_at: None,
+            rev: String::new(),
+        };
+        let Command::CreateNote { note } =
+            organizer.stamped(Command::CreateNote { note: live.clone() })
+        else {
+            unreachable!()
+        };
+        let (millis, device) = note.rev.split_once('-').expect("a stamped revision");
+        assert_eq!(device, "phone");
+        assert_eq!(millis.len(), 13, "zero-padded, so the string orders as a number");
+        assert!(millis.parse::<i64>().unwrap() > 0);
+
+        let mut after = live.clone();
+        after.body = "y".into();
+        let Command::UpdateNote { before, after, .. } = organizer.stamped(Command::UpdateNote {
+            id: NoteId(1),
+            before: live.clone(),
+            after,
+        }) else {
+            unreachable!()
+        };
+        assert_ne!(after.rev, live.rev, "the row being written is stamped");
+        assert_eq!(before.rev, live.rev, "the row being replaced is not");
     }
 
     #[test]

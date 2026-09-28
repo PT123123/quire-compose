@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased — 笔记与任务按 唯一 ID 合并，revision 说了算
+
+The organizer's half of the sync, ported to the reference app's rule (core ADR-0004,
+this shell's ADR-0026, the desktop's ADR-0125). `notes` and `tasks` now merge by their
+**唯一 ID** and settle two copies of one row by the newer **revision**; both devices
+must be updated together, because `SNAPSHOT_VERSION` moves to 4.
+
+- **A note or a task is keyed by its uuid, not by its integer row id.** Two devices
+  that each filed a note under row 1 hold two notes — the integer is a per-device
+  watermark and the uuid is the name — so the merge no longer renumbers the organizer,
+  and a reply's `ref_note` follows its parent to the id it actually landed under here
+- **A conflict is settled once, by the revision** (`"{millis:013}-{device}"`, compared
+  as a string): the newer copy stands, on both ends, in the round that finds it. The
+  old rule kept this device's copy *and wrote it into its shadow*, so the next round
+  read the other device's row as a one-sided edit and settled the same argument again,
+  the other way
+- **Every organizer write here stamps that revision**, and it is stamped in the one
+  funnel every write already passes through (`apply` / `apply_all`) rather than at the
+  dozen call sites that build the rows. `Organizer` therefore holds this device's id,
+  read once when the session opens; the `before` half of an update is deliberately left
+  alone, so one 撤销 puts a row back looking as old as it was instead of newer
+- **A bin and a restore are writes like any other**, which is why the revision is a
+  field of its own: `edited` deliberately does not move when a row is binned, so a bin
+  and its restore would otherwise carry the same stamp with nothing to order them
+- **A purge still stays purged**: it is the one removal with no row to carry it, so the
+  per-peer shadow remains what tells "this device never had the row" from "this device
+  emptied it out of 回收站"
+- New tests: `the_funnel_stamps_the_written_row_and_never_the_before_half`; the core's
+  `the_uuid_is_the_key_not_the_integer_id`,
+  `an_organizer_edit_lands_and_the_newer_revision_wins_a_double_edit`,
+  `a_bin_travels_as_a_write_of_the_row_it_belongs_to` and the v30 migration step
+
 ## Unreleased — 同步：一次带表格的往返不再关掉本机同步
 
 Two desktop-paired bugs, both about what this shell is allowed to *refuse*

@@ -4,6 +4,44 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0026 · The organizer holds this device's id, and its funnel stamps the revision
+
+Decision: `Organizer` gains a `device: String` (set by the session once at `open` and
+carried across `reload_in_memory`), and its two funnels — `apply` and `apply_all`, the
+only ways a command reaches `core::command::exec` — stamp the row they are about to
+write with a fresh **revision** before planning it:
+
+```rust
+fn stamped(&self, mut cmd: Command) -> Command {
+    cmd.stamp_rev(&self.rev());   // organizer::rev(now_millis(), &self.device)
+    cmd
+}
+```
+
+A new `now_millis()` sits beside `now_secs()`. The `before` half of an update is
+deliberately not stamped; the sync apply does not stamp at all, because its rows come
+out of the merge with the revision already decided.
+
+Context: core ADR-0004 keys `notes` and `tasks` on their 唯一 ID and settles two copies
+of one row by the newer revision, and that only works if every write carries one. This
+shell creates and edits those rows from a dozen call sites — ＋, a field on blur, 指令's
+batch, the bin verbs, a list's delete that moves its tasks — and the module note
+already says all of them pass through one funnel, so the funnel is where the stamp
+belongs rather than a rule every call site has to remember.
+
+Why the id lives on the `Organizer` and not on the session it belongs to: the stamp
+happens *inside* a method that already holds `&mut self` over the catalog, and an id
+read from a `settings` row would mean reaching back through the session on every
+keystroke. Read **once** at open, it also cannot change between two writes of one
+session — a device whose id moved under it would order its own two writes arbitrarily.
+
+Consequences: the same as the desktop's ADR-0125 — `edited` keeps its meaning (a bin
+and a restore still do not restamp it), the timestamp is the wall clock in
+milliseconds because a revision is compared with a peer's rather than with this
+session's own clock, and the `before` half is left alone so one 撤销 puts a row back
+looking as old as it was. Pinned by
+`the_funnel_stamps_the_written_row_and_never_the_before_half`.
+
 ## ADR-0025 · A database block is not a database row: the veto reads rows only
 
 Decision: `unsyncable` answers `Some` for one condition — this device's own

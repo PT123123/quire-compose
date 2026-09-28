@@ -20,11 +20,15 @@ crate-type = ["cdylib", "rlib"]
 # The same pinned rev both existing shells carry (ADR-0094) — a rev, not a tag,
 # because the core repo publishes neither tags nor releases yet.
 #
-# This rev carries SPEC §四十一's 回收站 (core ADR-0003) on top of the 唯一 ID (core
-# ADR-0002) and the organizer's 引用 (`notes.ref_note`, core ADR-0001). Bump it only
-# once that commit is on `origin`: a shell cannot build against an unpublished
-# commit, so the core lands and is pushed first and the pin follows.
-quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "fbfdaca7273021f3d0171e9d88df7ff7404b4f95" }
+# This rev carries the organizer's **sync model** (core ADR-0004) on top of SPEC
+# §四十一's 回收站 (core ADR-0003), the 唯一 ID (core ADR-0002) and the organizer's
+# 引用 (`notes.ref_note`, core ADR-0001): notes and tasks are merged by their 唯一 ID
+# with the row's revision as the arbiter. `SNAPSHOT_VERSION` is now 4, so this pin
+# moves together with the desktop's — a device left behind refuses to sync rather
+# than half-understanding. Bump it only once that commit is on `origin`: a shell
+# cannot build against an unpublished commit, so the core lands and is pushed first
+# and the pin follows.
+quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "d4cad517bc468f8d0bc73ab2085d1cf183d251fb" }
 jni = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

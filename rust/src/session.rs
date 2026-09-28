@@ -490,7 +490,7 @@ impl Session {
         let persistence =
             PersistenceService::with_default_clock(repo.clone()).with_database_snapshots(&repo);
 
-        Ok(Session {
+        let mut session = Session {
             repo,
             persistence,
             doc,
@@ -507,7 +507,14 @@ impl Session {
             // Not started here: the engine spawns four threads and binds a port,
             // and an app that never opens the 同步 page should do neither.
             sync: None,
-        })
+        };
+        // The organizer stamps every write with this device's id (the row's
+        // revision), so it has to know it — read once here and kept for the
+        // session, because a device whose id changed between two writes would
+        // order neither against the peer's.
+        let device = session.sync_self_info().id;
+        session.org.set_device(&device);
+        Ok(session)
     }
 
     /// The reply to `open`: the view, plus a startup notice if there is one.
@@ -551,7 +558,11 @@ impl Session {
             .filter(|p| self.ws.contains(*p))
             .or_else(|| self.ws.first_root());
 
-        let (org, _org_notice) = Organizer::load(&self.repo);
+        // The device id the organizer stamps into every write's revision is kept
+        // across the reload: the catalog is rebuilt, this device's identity is not.
+        let device = self.org.device().to_string();
+        let (mut org, _org_notice) = Organizer::load(&self.repo);
+        org.set_device(&device);
         self.org = org;
 
         self.hist = History::default();

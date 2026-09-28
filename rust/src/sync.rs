@@ -1149,6 +1149,10 @@ mod tests {
             edited: 1,
             ref_note: Some(local.notes[0].id),
             deleted_at: None,
+            // A row written by a real peer always carries one; the desktop's funnel
+            // stamps it on the way into `exec`, and a fixture without one would be
+            // describing a row no shell can produce.
+            rev: quire_core::core::organizer::rev(1_700_000_000_000, "peer-1"),
         });
 
         let peer = PeerRecord {
