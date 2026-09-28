@@ -220,9 +220,12 @@ private fun SyncBanner(sync: SyncState) {
 /**
  * The one thing this build refuses to do, said before it can be tried.
  *
- * A library with databases or attachments cannot be carried by this shell, and a
- * snapshot that dropped them would make a peer's merge read the absence as a
- * deletion — so the engine is not started at all and the reason is on screen.
+ * A library whose own folder holds attachment rows cannot be carried by this shell:
+ * there is no way for it to send the bytes, and a snapshot that named a row with no
+ * file behind it would be renumbered out from under the blocks that point at it — so
+ * the engine is not started at all and the reason is on screen. A database does not
+ * stop anything: its rows never enter this device's snapshot and an inbound peer's
+ * rows are dropped at the door, which is the same silence both ends already agree on.
  */
 @Composable
 private fun SyncGate(why: String) {
@@ -493,16 +496,18 @@ private fun SyncLogLine(line: SyncLogRow) {
 /**
  * What crosses, and what does not.
  *
- * Not a disclaimer for its own sake: this shell cannot carry databases or
- * attachments, so a library that has them refuses to sync at all, and the line
- * has to be somewhere a user will read it.
+ * Not a disclaimer for its own sake: the page has to say where a table is edited,
+ * because the rows a user cannot see on this screen are the ones the other device
+ * keeps to itself. They stay out of both directions on purpose — see the module
+ * note in the bridge's `sync.rs`.
  */
 @Composable
 private fun SyncFoot() {
     val colors = LocalQuireColors.current
     Text(
-        text = "同步搬运：页面、正文、笔记与任务。这个版本还不同步数据库和附件 —— " +
-            "带这两样的资料库会拒绝同步（在桌面端处理它，或先移除）。",
+        text = "同步搬运：页面、正文、笔记与任务，以及表格本身。" +
+            "表格的内容与图片附件不在本机同步：表格请回桌面端编辑，" +
+            "本机资料库里存有附件时不会同步。",
         style = QuireType.caption,
         color = colors.textMuted,
         modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),

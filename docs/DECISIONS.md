@@ -4,6 +4,77 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0025 · A database block is not a database row: the veto reads rows only
+
+Decision: `unsyncable` answers `Some` for one condition — this device's own
+attachment **rows** — and the `has_database` clause that scanned
+`state.blocks` for a `Database` kind or a `db_ref` is gone. The module note and the
+同步 page's foot line say what still does not cross: a table's *contents* and an
+attachment's *bytes* stay on the desktop, and a table shown here is the ▦ placeholder
+`ui/BlockKinds.kt` already draws.
+
+Context: this is the bug the user felt as *"手机端和电脑端的同步…好像不太好"*. The gate
+is consulted **before `Engine::start`**, and `Some` there means no worker thread, no
+listening socket, no UDP announcements, no pairing — and `sync_export` consults it
+again on every round. So a single successful sync with a desktop that held a table
+anywhere in its library wrote a `db_ref` block into this device's file (harmless by
+itself, and drawn as a placeholder) and switched this device's sync off from that
+round onwards, with a message telling the user to go and sync with the desktop they
+had just synced with. The desktop side of that pair was already safe: its
+`peer_carries_the_whole_library` gate answers a phone's silence about databases with
+its own rows (desktop ADR-0122), so the *rows* were never in the round's danger. What
+was in it was the *block*, which is not a row.
+
+Consequences: the veto's remaining clause is the case no other half can cover — a
+library that arrived with attachment rows in it (a desktop's file copied onto the
+phone, which `replace_all` deliberately leaves alone) would offer a peer a row whose
+bytes `Job::AttachmentBytes` answers empty for, and renumber the blocks that name it.
+The two merge allocators that the module note says are constants (`next_db`,
+`next_property`, `next_record`, `next_view`, and `next_attachment`) stay constant for
+the same reason as before, now stated where it is true: this build answers
+`databases = []` and inbound rows of both collections are dropped at the door, so
+neither half of a merge can hold one — with the attachment clause as the second half
+of that argument rather than the whole of it. A user who opens a *desktop* library on
+this device now syncs its pages, blocks, notes and tasks and sees its tables as
+placeholders; that is a narrower refusal than the one it replaces, and the foot line
+tells them which part they did not get. Covered by
+`a_peers_table_does_not_switch_this_devices_sync_off` (the block travels, the rows do
+not, the page still offers a round) and the rewritten
+`a_library_this_build_cannot_carry_is_refused_rather_than_half_synced`, which is now
+about one clause instead of two. **Honest limit**: a phone that was already poisoned
+by an earlier build recovers on the next launch of the 同步 page, because the gate is
+re-read at `Sync::start` — nothing here rewrites its stored blocks, which is the point
+of a veto that stopped reading them.
+
+## ADR-0024 · An inbound snapshot is trimmed at this door, not refused
+
+Decision: `sync_apply_remote` clears `databases` and `attachments` off a **clone of
+the inbound snapshot** before the merge, logs how many rows were dropped, and merges
+the rest. The round answers `Ok`, and the rows never enter the shadow this device
+agrees to. An inbound **push** from a device that is not in the peer table as paired is
+still refused outright.
+
+Context: the old answer was `Err("这个版本还不同步数据库/附件")` → HTTP 409, which
+meant a desktop-initiated round failed **as a whole**: its pages, its notes and its
+tasks went unsynced along with the tables, and the user saw 同步失败 with a message
+about a feature they were not trying to use that minute. Refusing was also the wrong
+shape for the hazard. A merge reads absence as a deletion, so what has to stay out is
+the *shadow* — a shadow holding a database this store cannot write would read, next
+round, as "this device deleted it".
+
+Consequences: dropping at the door keeps both properties, and the accepted attachments
+case is the one that mattered most: `sync_unsyncable` refuses to export a library that
+carries attachment rows, so a single friendly round that wrote them here would have
+disabled this device's sync for good — the same trap ADR-0025 removed, arriving from
+the other direction. The peer book is what makes the push rule enforceable: the core's
+server invents a `PeerRecord` for whoever POSTs, marking it `paired: true` on the
+strength of the snapshot naming itself, so the request cannot vouch for itself and this
+shell is the only place that can ask whether the device is known at all. (The desktop's
+pump asks the identical question — same hole, same answer.) Covered by
+`an_inbound_database_or_attachment_is_dropped_rather_than_refusing_the_round`; the
+409-vs-merge difference is a wire behaviour no headless test reaches, so the assertion
+is on the shadow and on what this device exports afterwards.
+
 ## ADR-0023 · The OS-open path: an address leaves through ACTION_VIEW, behind the core's allow-list
 
 Decision: the shell gains `QuireViewModel.openUrl`, the Compose half of the

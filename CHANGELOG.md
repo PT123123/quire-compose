@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased — 同步：一次带表格的往返不再关掉本机同步
+
+Two desktop-paired bugs, both about what this shell is allowed to *refuse*
+(ADR-0024, ADR-0025; the desktop's halves are its ADR-0122 and ADR-0123).
+
+### 对端有表格，本机照样同步
+
+- **A `database` block no longer vetoes a round.** The gate scanned this device's
+  blocks for a table and answered `Some`, and `Some` is the answer that keeps
+  `Engine::start` from starting anything: no worker thread, no listening socket, no
+  announcements, no pairing. One successful sync with a desktop that had a table
+  anywhere in its library was therefore enough to switch this device's sync off for
+  good — with a line telling the user to sync with the desktop they had just synced
+  with. A table's *block* is a placeholder this shell already draws (▦ 数据库); its
+  *rows* were never in that round's danger, because this build exports none and the
+  desktop answers a phone's silence about databases with its own copy
+- **The veto keeps one clause: this device's own attachment rows.** There is no door
+  through which an attachment row can enter — inbound ones are dropped below, and
+  `Job::AttachmentBytes` answers empty — so the only library that can grow one is a
+  desktop's file copied onto the phone, and `replace_all` deliberately leaves the
+  attachments table alone. Offering a peer a row with no file behind it is the case
+  the veto was ever about
+- **An inbound snapshot is trimmed at this door instead of refused.** A desktop
+  library with a table or a picture in it used to answer 409, so its pages, notes and
+  tasks went unsynced along with the tables. The rows are cleared off a clone of the
+  inbound snapshot — which is what keeps them out of the shadow this device agrees to,
+  and the reason an accepted attachment row would have been worse than a refusal — and
+  the log says how many were dropped
+- **An inbound push from a device that is not paired is refused.** The core's server
+  marks whoever POSTs as `paired: true` on the strength of the snapshot naming itself,
+  so the request cannot vouch for itself and this shell is the only place that can ask
+- **The automatic cycle only dials a peer that announced in the last minute**, the same
+  window the 在线 dot uses: a silent device is a device whose server stopped too, and
+  the round that follows only times out
+
+### 同步页说的还是那两件事
+
+- The 同步 page's foot line now names what does not cross (**a table's contents, an
+  attachment's bytes**) and where to edit a table (**the desktop**), rather than
+  announcing that a library with either refuses to sync at all — which was the old
+  rule, and no longer the gate's question
+- New tests: `a_peers_table_does_not_switch_this_devices_sync_off` (the block travels,
+  the rows do not, the page still offers a round), and the rewritten
+  `a_library_this_build_cannot_carry_is_refused_rather_than_half_synced`, which now
+  pins the single clause that remains
+
+
 ## Unreleased — 在系统浏览器中打开地址
 
 The shell gains an OS-open path (ADR-0023), the Compose half of the desktop's

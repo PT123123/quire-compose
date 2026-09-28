@@ -15,10 +15,17 @@
 //!   be quiet about, because a merge reads *absence* as a deletion: a snapshot
 //!   built here without databases, merged by a desktop peer whose shadow says the
 //!   databases were agreed present, would delete the user's databases on both
-//!   sides. So the gate is checked before the engine is even started
-//!   ([`Session::sync_ensure`]), an inbound snapshot that carries either is
-//!   refused, and a snapshot that somehow cannot be built is answered by *dropping
-//!   the reply channel* — the peer sees a failed sync, never an empty workspace.
+//!   sides. So the two collections are **answered with this device's own rows by
+//!   the desktop** ([`peer_carries_the_whole_library`] there) and **dropped at
+//!   this door on the way in** ([`Session::sync_apply_remote`]), which is the same
+//!   rule seen from the end that can hold them: neither library asks the other to
+//!   account for a row it never carried. What is left to veto is the one case the
+//!   two halves cannot cover — this device's *own* attachment rows, which no peer
+//!   is ever shown and which would therefore be renumbered out from under the
+//!   blocks that name them. That veto is checked before the engine is even started
+//!   ([`Session::sync_ensure`]), and a snapshot that somehow cannot be built is
+//!   answered by *dropping the reply channel* — the peer sees a failed sync, never
+//!   an empty workspace.
 //! * **The document half is written by `replace_all`, the organizer half by
 //!   `Change`s.** `replace_all` takes a whole `PersistedState` and is exactly the
 //!   right shape for "here is the merged workspace"; the organizer is not part of
@@ -44,7 +51,7 @@ use serde::Serialize;
 
 use quire_core::core::organizer::{ListId, OrganizerCatalog, TaskId};
 use quire_core::core::persistence::Repository;
-use quire_core::core::types::{Attachment, BlockKind, PersistedState};
+use quire_core::core::types::Attachment;
 use quire_core::core::Change;
 use quire_core::services::sync::engine::{Cmd, DeviceInfo, Engine, Job, LogLine, PeerRecord};
 use quire_core::services::sync::merge::{merge, MergeCtx};
@@ -69,6 +76,12 @@ const MIN_INTERVAL: u64 = 15;
 const DEFAULT_INTERVAL: u64 = 60;
 /// How many log lines are kept. Newest last.
 const LOG_CAP: usize = 50;
+/// A device is auto-synced while its announcement is recent. The announcer
+/// speaks every 4 s, so this leaves room for a missed beat or two — and a peer
+/// that stopped announcing is a peer whose server stopped too, which is the
+/// round that would only burn the connect timeout and leave this side holding
+/// 「正在同步…」 for it. The desktop's pump filters on the same window.
+const RECENT_ENOUGH_SECS: u64 = 60;
 
 fn shadow_key(peer_id: &str) -> String {
     format!("sync.shadow.{peer_id}")
@@ -138,9 +151,9 @@ pub struct Sync {
     cmds: Sender<Cmd>,
     jobs: Receiver<Job>,
     /// Why this library cannot sync, decided once at start. See the module note:
-    /// the answer cannot change afterwards, because nothing in this shell can add
-    /// a database or an attachment, and an inbound snapshot carrying one is
-    /// refused.
+    /// the answer cannot change afterwards, because nothing this shell does adds an
+    /// attachment row, and an inbound snapshot's rows for both collections are
+    /// dropped at [`Session::sync_apply_remote`]'s door rather than merged.
     unsyncable: Option<String>,
     busy: bool,
     last_auto: u64,
@@ -201,17 +214,26 @@ fn local_ip() -> Option<String> {
 }
 
 /// The one thing this build cannot carry. `None` is the ordinary case.
-fn unsyncable(state: &PersistedState, attachments: &[Attachment]) -> Option<String> {
-    let has_database = state
-        .blocks
-        .iter()
-        .any(|b| b.kind == BlockKind::Database || b.db_ref.is_some());
-    if has_database {
-        return Some(
-            "这个资料库里有数据库 —— 本版本还不同步数据库，请用桌面端同步（或先在桌面端删掉数据库）"
-                .to_string(),
-        );
-    }
+///
+/// Attachments only, and the reason the database half left this gate is worth
+/// keeping in the file: a *block* that points at a database is not a database row.
+/// It arrives with the page it belongs to (`replace_all` writes it like any other
+/// block), and this shell draws it from the desktop's copy of the table — so it
+/// used to be enough for one round with a desktop that had a table anywhere in its
+/// library to put `Some` here, and `Some` is the answer that stops the engine from
+/// starting at all: no server, no announcements, no pairing, and a line telling
+/// the user to sync with the desktop they had just synced with. The rows
+/// themselves were never at risk from that round, because this build answers
+/// `databases = []` and drops inbound database rows at the door, and the desktop
+/// keeps its own copy against both silences (`peer_carries_the_whole_library`).
+///
+/// An attachment row is a different object: the bytes sit in this device's own
+/// folder, `Job::AttachmentBytes` answers empty for them, and `replace_all`
+/// deliberately leaves the attachments table alone — so a library that arrived with
+/// rows in it (a desktop's file copied onto the phone) would offer the peer a row
+/// with no file behind it, and renumber the blocks that name it. That is the case
+/// the veto is for.
+fn unsyncable(attachments: &[Attachment]) -> Option<String> {
     if !attachments.is_empty() {
         return Some(
             "这个资料库里有附件 —— 本版本还不同步附件，请用桌面端同步（或先在桌面端移除附件）"
@@ -224,8 +246,11 @@ fn unsyncable(state: &PersistedState, attachments: &[Attachment]) -> Option<Stri
 /// The id allocators the merge draws on, seeded from both snapshots.
 ///
 /// Only the collections this build can carry are seeded from real rows; the
-/// database layer's four are constants, because the gate guarantees both
-/// snapshots carry none and the merge therefore never renumbers one.
+/// database layer's four are constants, because a snapshot this device builds
+/// answers `databases = []` and every inbound snapshot has its rows dropped at
+/// [`Session::sync_apply_remote`]'s door — neither half of the merge can hold a
+/// database row to renumber. The attachment allocator rides the same argument, and
+/// [`unsyncable`] is the clause that keeps it true for this device's own rows.
 struct Allocators {
     page: Cell<u64>,
     block: Cell<u64>,
@@ -456,9 +481,8 @@ impl Session {
 
     /// Whether this library can be synced by this build; `Some(reason)` if not.
     fn sync_unsyncable(&self) -> Option<String> {
-        let state = self.repo.load().ok()?;
         let attachments = self.repo.load_attachments().ok()?;
-        unsyncable(&state, &attachments)
+        unsyncable(&attachments)
     }
 
     // ---- the engine's lifetime ----
@@ -646,7 +670,37 @@ impl Session {
                 Job::AttachmentBytes { reply, .. } => {
                     let _ = reply.send(Vec::new());
                 }
-                Job::ApplyRemote { peer, snapshot, reply, .. } => {
+                Job::ApplyRemote {
+                    peer,
+                    snapshot,
+                    reply,
+                    ..
+                } => {
+                    // An **inbound push** arrives with no kind: the core's server
+                    // has only the sender's own snapshot to name it by, and it
+                    // marks the record it invents `paired: true` on the strength
+                    // of the snapshot saying so. So this is the one place that can
+                    // ask whether the device is in this book at all — and without
+                    // the question, any machine that can reach the port could
+                    // rewrite this library. The desktop's pump asks the same one.
+                    let inbound_push = peer.kind.is_empty();
+                    let known = self
+                        .sync_peers()
+                        .iter()
+                        .any(|p| p.id == peer.id && p.paired);
+                    if inbound_push && !known {
+                        let message = format!(
+                            "{} 推送了快照但未配对 — 已拒绝",
+                            if peer.name.is_empty() {
+                                "未知设备"
+                            } else {
+                                &peer.name
+                            }
+                        );
+                        self.sync_log_push(&peer.id, false, &message).ok();
+                        let _ = reply.send(Err(message));
+                        continue;
+                    }
                     let result = self.sync_apply_remote(&snapshot, &peer);
                     if let Ok(merged) = &result {
                         self.sync_store_shadow(&peer.id, merged).ok();
@@ -730,7 +784,12 @@ impl Session {
             let peers: Vec<PeerRecord> = self
                 .sync_peers()
                 .into_iter()
-                .filter(|p| p.paired && p.id != me && !p.ip.is_empty())
+                .filter(|p| {
+                    p.paired
+                        && p.id != me
+                        && !p.ip.is_empty()
+                        && now.saturating_sub(p.last_seen) < RECENT_ENOUGH_SECS
+                })
                 .collect();
             if !peers.is_empty() {
                 if let Some(s) = self.sync.as_mut() {
@@ -755,7 +814,7 @@ impl Session {
         self.persistence.force_flush().map_err(|e| e.to_string())?;
         let state = self.repo.load().map_err(|e| e.to_string())?;
         let attachments = self.repo.load_attachments().map_err(|e| e.to_string())?;
-        if let Some(why) = unsyncable(&state, &attachments) {
+        if let Some(why) = unsyncable(&attachments) {
             return Err(why);
         }
 
@@ -790,11 +849,20 @@ impl Session {
         remote: &SyncSnapshot,
         peer: &PeerRecord,
     ) -> Result<SyncSnapshot, String> {
-        if !remote.databases.is_empty() || !remote.attachments.is_empty() {
-            return Err(
-                "对端带了数据库或附件 —— 本版本还不同步这些，请用桌面端".to_string(),
-            );
-        }
+        // A desktop library with a database or a picture in it is the ordinary
+        // case, not a broken peer: refusing the whole round over it was this
+        // side's own doing, because `replace_all` below keeps only what it can
+        // write — so `databases` and `attachments` are dropped from the inbound
+        // snapshot and the rest of the library merges. Dropping them here is what
+        // keeps them out of the shadow too, which is the point: a shadow that
+        // claimed a database this store cannot hold would read, on the next
+        // round, as "this device deleted it". Attachment rows would be worse —
+        // `sync_unsyncable` refuses to export a library that carries any, so the
+        // first accepted batch would switch this device's sync off for good.
+        let mut remote = remote.clone();
+        let carried = remote.databases.len() + remote.attachments.len();
+        remote.databases.clear();
+        remote.attachments.clear();
 
         let local = self.sync_export()?;
         let shadow = self.sync_shadow(&peer.id);
@@ -804,6 +872,19 @@ impl Session {
             remote.device.clone()
         };
 
+        // Say so in the log the sync page already draws: the round did run and
+        // did move the pages, and a table the other device shows that this one
+        // never grew is otherwise a silent difference between two libraries the
+        // user was just told had synced.
+        if carried > 0 {
+            self.sync_log_push(
+                &peer_name,
+                true,
+                &format!("其中 {carried} 项是数据库或附件 —— 本机不保存这些，没有同步进来"),
+            )
+            .ok();
+        }
+
         let alloc = Allocators {
             page: Cell::new(seed(&local.pages, &remote.pages, |r| r.id)),
             block: Cell::new(seed(&local.blocks, &remote.blocks, |r| r.id)),
@@ -811,9 +892,10 @@ impl Session {
             task: Cell::new(seed(&local.tasks, &remote.tasks, |r| r.id)),
             list: Cell::new(seed(&local.lists, &remote.lists, |r| r.id)),
         };
-        // The database layer's four allocators are constants: both snapshots carry
-        // no database rows (the gate), so the merge cannot renumber one. If that
-        // ever changes, these are the lines to fix.
+        // The database layer's four allocators are constants: neither snapshot can
+        // carry a database row by the time the merge sees them (this device answers
+        // `databases = []`, an inbound one has them cleared above), so there is no
+        // row to renumber. If that ever changes, these are the lines to fix.
         let mut next_attachment = || 1u64;
         let mut next_db = || 1u64;
         let mut next_property = || 1u64;
@@ -860,7 +942,7 @@ impl Session {
             next_list: &mut next_list,
             new_uuid: &mut new_uuid,
         };
-        let outcome = merge(&local, shadow.as_ref(), remote, &peer_name, &mut ctx);
+        let outcome = merge(&local, shadow.as_ref(), &remote, &peer_name, &mut ctx);
         let merged = outcome.merged;
         drop(ctx);
 
@@ -956,9 +1038,8 @@ fn organizer_changes(local: &OrganizerCatalog, merged: &SyncSnapshot) -> Vec<Cha
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quire_core::core::{
-        Attachment, AttachmentId, Block, BlockId, ColorKind, Lang, OrderKey, PageId,
-    };
+    use quire_core::services::sync::model::SDatabase;
+    use quire_core::core::{Attachment, AttachmentId};
 
     /// A fresh library in its own directory. No `testing` helper here: the core's
     /// scratch type is behind its own feature, and a temp directory is enough for
@@ -973,44 +1054,11 @@ mod tests {
         dir
     }
 
-    fn block(kind: BlockKind) -> Block {
-        Block {
-            id: BlockId(1),
-            page: PageId(1),
-            parent: None,
-            order: OrderKey::FIRST,
-            kind,
-            text: String::new(),
-            checked: false,
-            marks: Vec::new(),
-            color: ColorKind::Default,
-            background: ColorKind::Default,
-            page_ref: None,
-            folded: false,
-            attachment: None,
-            img_percent: 100,
-            columns: 0,
-            lang: Lang::Plain,
-            db_ref: None,
-            sync_ref: None,
-        }
-    }
-
-    /// The gate, which is the one thing that keeps a merge from reading absence
-    /// as a deletion. Pure, so it costs nothing to pin.
+    /// The gate, which is the one thing that keeps a merge from reading absence as
+    /// a deletion. Pure, so it costs nothing to pin.
     #[test]
     fn a_library_this_build_cannot_carry_is_refused_rather_than_half_synced() {
-        let plain = PersistedState::default();
-        assert!(unsyncable(&plain, &[]).is_none());
-
-        let with_database = PersistedState {
-            blocks: vec![block(BlockKind::Database)],
-            ..PersistedState::default()
-        };
-        assert!(
-            unsyncable(&with_database, &[]).is_some(),
-            "a database block must stop the sync, not be dropped from the snapshot"
-        );
+        assert!(unsyncable(&[]).is_none(), "an ordinary library syncs");
 
         let attachment = Attachment {
             id: AttachmentId(1),
@@ -1023,9 +1071,43 @@ mod tests {
             height: 1,
         };
         assert!(
-            unsyncable(&plain, &[attachment]).is_some(),
-            "an attachment row must stop the sync too"
+            unsyncable(&[attachment]).is_some(),
+            "an attachment row stops the sync: this device cannot send its bytes"
         );
+    }
+
+    /// What left the gate, and why it is worth a test of its own: a database
+    /// *block* is not a database row. It arrives with the page it sits on, the way
+    /// every other block does, and the old gate read it as the table itself — so one
+    /// round with a desktop that had a table anywhere in its library was enough to
+    /// answer `Some`, which is the answer that keeps the engine from starting at all:
+    /// no server, no announcements, no pairing, and a line telling the user to sync
+    /// with the desktop they had just synced with. The rows were never in that
+    /// round's danger, since this build exports none and drops inbound ones.
+    #[test]
+    fn a_peers_table_does_not_switch_this_devices_sync_off() {
+        let dir = scratch("table-block");
+        let mut session = Session::open(dir.to_str().unwrap()).expect("open");
+        session.dispatch(r#"{"op":"createPage","title":"带表格的页面"}"#);
+        session.dispatch(r#"{"op":"appendBlock","kind":"database","text":""}"#);
+
+        assert!(
+            session.sync_unsyncable().is_none(),
+            "the 同步 page still offers a round"
+        );
+        let snap = session
+            .sync_export()
+            .expect("a library with a table block exports");
+        assert!(
+            snap.blocks.iter().any(|b| b.kind == "database"),
+            "the block itself travels, as part of its page"
+        );
+        assert!(
+            snap.databases.is_empty(),
+            "while the table's rows stay where they live"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The shell's half of the protocol, end to end and without a socket: export
@@ -1116,6 +1198,93 @@ mod tests {
             !session.sync_self_info().id.is_empty(),
             "and so must this device's identity"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A desktop library with a database or a picture in it is the ordinary case,
+    /// so the phone has to merge the pages it *can* carry instead of refusing the
+    /// round — and must not let the dropped rows into the shadow it agrees to.
+    ///
+    /// The shadow is the whole point of the second half of this test: a shadow
+    /// holding a database this store cannot write would read, on the next round,
+    /// as "this device deleted it" — and an accepted attachment row is worse still,
+    /// because `sync_unsyncable` refuses to export a library that carries any, so
+    /// one friendly round would switch this device's sync off for good.
+    #[test]
+    fn an_inbound_database_or_attachment_is_dropped_rather_than_refusing_the_round() {
+        let dir = scratch("strip");
+        let mut session = Session::open(dir.to_str().unwrap()).expect("open");
+        session.dispatch(r#"{"op":"createPage","title":"本机页面"}"#);
+
+        let local = session.sync_export().expect("export");
+        session.sync_store_shadow("peer-1", &local).expect("shadow");
+        let mut remote = local.clone();
+        remote.device_id = "peer-1".into();
+        remote.device = "Desktop".into();
+        for page in &mut remote.pages {
+            page.title = "对端改过的标题".into();
+        }
+        remote.databases.push(SDatabase {
+            id: 77,
+            name: "任务表".into(),
+            template: String::new(),
+            properties: Vec::new(),
+            views: Vec::new(),
+            records: Vec::new(),
+            values: Vec::new(),
+        });
+        remote.attachments.push(SAttachment {
+            id: 88,
+            name: "图片".into(),
+            file: "88.png".into(),
+            thumb: String::new(),
+            mime: "image/png".into(),
+            bytes: 4,
+            width: 0,
+            height: 0,
+        });
+
+        let peer = PeerRecord {
+            id: "peer-1".into(),
+            name: "Desktop".into(),
+            kind: "windows".into(),
+            ip: "127.0.0.1".into(),
+            port: SYNC_PORT,
+            paired: true,
+            last_seen: 0,
+            last_sync: String::new(),
+        };
+        let merged = session
+            .sync_apply_remote(&remote, &peer)
+            .expect("the round runs");
+
+        assert!(
+            merged.pages.iter().any(|p| p.title == "对端改过的标题"),
+            "the pages still merged"
+        );
+        assert!(
+            merged.databases.is_empty() && merged.attachments.is_empty(),
+            "and the rows this store cannot hold were not claimed"
+        );
+
+        let shadow = session.sync_shadow("peer-1").expect("shadow stored");
+        assert!(
+            shadow.databases.is_empty() && shadow.attachments.is_empty(),
+            "the shadow this device agrees to carries nothing it does not have"
+        );
+
+        assert!(
+            session
+                .sync_log()
+                .iter()
+                .any(|line| line.message.contains("数据库或附件")),
+            "the strip is said out loud on the 同步 page"
+        );
+
+        // The round must not have cost this device its next one.
+        let back = session.sync_export().expect("re-export");
+        assert!(back.attachments.is_empty(), "no attachment landed");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
