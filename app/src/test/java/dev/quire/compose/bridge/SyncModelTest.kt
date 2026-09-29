@@ -77,22 +77,27 @@ class SyncModelTest {
     }
 
     @Test
-    fun the_rows_split_into_peers_and_merely_discovered_devices() {
+    fun the_rows_are_one_list_of_devices_and_this_one_excluded() {
         val view = (parseReply(body) as Reply.Updated).view
         val sync = view.sync
 
-        // This device is neither: it is drawn first and separately, and it has no
-        // pairing verb because there is nothing to pair with itself.
-        assertEquals(1, sync.peers.size)
-        assertEquals("windows-11", sync.peers[0].id)
-        assertEquals("2026-09-25 21:00", sync.peers[0].lastSync)
-        assertTrue(sync.peers[0].online)
+        // ADR-0030: "paired" and "merely discovered" stopped being two states, so
+        // there is one list. The two rows below are a device that has synced and
+        // one that is merely heard — the flag that used to separate them is still
+        // on the wire (`paired`), because a peer on an older build sends it, but
+        // nothing in this shell's UI reads it any more.
+        assertEquals(2, sync.devices.size)
+        assertEquals("windows-11", sync.devices[0].id)
+        assertEquals("2026-09-25 21:00", sync.devices[0].lastSync)
+        assertTrue(sync.devices[0].online)
+        assertEquals("windows-12", sync.devices[1].id)
+        assertFalse(sync.devices[1].online)
 
-        assertEquals(1, sync.discovered.size)
-        assertEquals("windows-12", sync.discovered[0].id)
-        assertFalse(sync.discovered[0].online)
+        // This device is excluded: it is drawn first and separately, above the
+        // list, and it has no 立即同步 verb because it cannot sync with itself.
         assertEquals(3, sync.rows.size)
         assertTrue(sync.rows[0].selfDevice)
+        assertTrue(sync.devices.none { it.selfDevice })
     }
 
     @Test

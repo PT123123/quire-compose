@@ -4,6 +4,65 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0030 · 配对 is gone, the lists take a pull, and a selected filter is not an accent
+
+Three things; the first is the same decision the desktop's ADR-0128 records, from
+this shell's side.
+
+**配对 is gone.** `Job::Discovered` records an announced device with
+`paired: true`, and the inbound-push gate in `sync_pump` asks the only question
+still standing: have we ever heard this id? A push from an address that never
+announced is still refused. The 同步 page's two lists — 已配对的设备 and
+已发现的设备 — are now one, 本网络上的设备, with a single 立即同步 per row; the
+排序 became **online first** rather than paired first, because with pairing gone
+the old key would have put the device actually on the network second.
+
+`sync_now` no longer filters on `paired`, and `peers_due_for_a_round` does not
+either. `Bridge.syncPair` stays, unused by any screen: a peer on an older build
+can still send it, and `/sync/pair` is part of the wire protocol in quire-core, so
+deleting one end would break a peer's round rather than tidy anything.
+
+**收件箱 and 任务 take a pull to refresh**, wrapping each `LazyColumn` in
+`OrgPullRefresh` — a `NestedScrollConnection`, ~60 lines, no new dependency.
+Material 3's own `PullToRefreshBox` is the right widget and is not available
+here: it landed in material3 1.3 and this build is on compose-bom 2024.06.00, so
+taking it means bumping the BOM under every screen to get one gesture. The
+contract it keeps: it pulls **only** at the top of the list (past row 0 every
+delta is handed back, so an upward scroll is the list's own fling and nothing
+here touches it), the drag is rubber-banded and capped, and `busy` blocks a second
+pull — the indicator and the bar's 刷新 are the same fact on two surfaces. The
+board is left alone: its columns scroll sideways and a vertical pull there is a
+different gesture with a different meaning.
+
+**A selected filter chip is neutral.** `OrgChip`'s selected fill was
+`surfaceSelected` — 22% accent, a blue plate for 全部笔记, which is lit by
+default. It is now `surfaceHover` with a border, matching the desktop's
+`OrgFilterChip` change in the same pass. `SyncState.devices` replaces `peers` and
+`discovered` as the two accessors the page used.
+
+Context: 去掉配对功能，只要拿到软件的在局域网内的就自动互相拉推 · 安卓需要下拉刷新 ·
+全部笔记的蓝色背景太显眼了. The reason removing pairing is cheap here is the same
+one on the desktop, and it is worth writing down in both places: the
+announcement is an unkeyed JSON string carrying `{id, name, kind, port}`,
+broadcast to the whole broadcast domain every four seconds, and the listener
+writes whatever arrives. A pairing step was a question asked twice. The blast
+radius widens from *a process that announces itself* to *anything that can reach
+5878*; the user chose that.
+
+Consequences:
+
+- `peers_due_for_a_round` is asked by both the timer and the button, so a
+  hand-started round and a background one can never disagree about who is
+  reachable. `every_device_in_the_peer_book_is_a_rounds_candidate` pins the
+  upgrade path: a peer book written by an older build can hold `paired: false`
+  rows, and nothing rewrites that flag now.
+- The pull and the button both call `syncNowAll`, so a pull on a device that has
+  heard nobody produces the same honest 「还没有别的设备出现在这个网络上」 the
+  button would — not a silent no-op.
+- `the_refresh_op_is_spelled_the_way_the_button_sends_it` still passes, and
+  `sync_now_all`'s own test now asserts the new wording; a test still pinning
+  「还没有配对任何设备」 would be pinning a dead concept.
+
 ## ADR-0029 · 收件箱 and 任务 carry a 刷新, and it is a round with every device
 
 Decision: both organizer bars get a `Refresh` icon that starts **one round with

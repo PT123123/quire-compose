@@ -221,11 +221,16 @@ data class SyncState(
     val rows: List<SyncRow>,
     val log: List<SyncLogRow>,
 ) {
-    /** The device rows that are paired, this device excluded. */
-    val peers: List<SyncRow> get() = rows.filter { it.paired && !it.selfDevice }
-
-    /** Devices heard on the wire that have not been paired yet. */
-    val discovered: List<SyncRow> get() = rows.filter { !it.paired && !it.selfDevice }
+    /**
+     * Every other device this one has heard, this device excluded.
+     *
+     * One list, because "paired" and "merely discovered" stopped being two states
+     * (ADR-0029): a row exists here because its announcement was heard, and a
+     * heard device is one we sync with. The page used to split them into 已配对的
+     * 设备 and 已发现的设备, which made a device the user had just opened look
+     * like it was waiting for permission.
+     */
+    val devices: List<SyncRow> get() = rows.filter { !it.selfDevice }
 
     companion object {
         val Empty = SyncState(

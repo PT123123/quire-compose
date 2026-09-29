@@ -130,21 +130,13 @@ fun SyncPage(vm: QuireViewModel) {
         }
         item(key = "self") { SyncSelf(sync) }
 
-        item(key = "peers-header") { SyncSection("已配对的设备") }
-        if (sync.peers.isEmpty()) {
+        item(key = "peers-header") { SyncSection("本网络上的设备") }
+        if (sync.devices.isEmpty()) {
             item(key = "peers-empty") {
-                SyncEmpty("还没有配对的设备 —— 和另一台设备互相配对之后，可以手动或按间隔自动同步。")
+                SyncEmpty("没听到别的设备 —— 打开另一台设备就会自动同步，不需要任何设置。")
             }
         }
-        items(sync.peers, key = { "peer-${it.id}" }) { row -> SyncDevice(row = row, vm = vm) }
-
-        item(key = "found-header") { SyncSection("已发现的设备") }
-        if (sync.discovered.isEmpty()) {
-            item(key = "found-empty") {
-                SyncEmpty("没听到别的设备 —— 确认两台设备都开着这一页，并且连在同一个局域网。")
-            }
-        }
-        items(sync.discovered, key = { "found-${it.id}" }) { row -> SyncDevice(row = row, vm = vm) }
+        items(sync.devices, key = { "device-${it.id}" }) { row -> SyncDevice(row = row, vm = vm) }
 
         item(key = "settings") {
             SyncSettings(
@@ -313,10 +305,13 @@ private fun SyncDevice(row: SyncRow, vm: QuireViewModel) {
             SyncBadge(label = kindLabel(row.kind), tint = colors.textMuted)
         }
         Text(
+            // The address and the last round, and nothing about pairing: a device
+            // on this list is synced with by definition now (ADR-0029), so a
+            // "已配对" badge on every row said nothing and 发起配对 on some rows
+            // said the opposite.
             text = listOf(
                 row.address.ifEmpty { "没有地址" },
-                if (row.paired) "已配对" else "未配对",
-                if (row.lastSync.isEmpty()) "从未同步" else "上次同步 ${row.lastSync}",
+                if (row.lastSync.isEmpty()) "还没同步过" else "上次同步 ${row.lastSync}",
             ).joinToString("  ·  "),
             style = QuireType.caption,
             color = colors.textSecondary,
@@ -324,16 +319,12 @@ private fun SyncDevice(row: SyncRow, vm: QuireViewModel) {
             overflow = TextOverflow.Ellipsis,
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (row.paired) {
-                TextButton(onClick = { vm.syncNow(row.id) }) { Text("立即同步", color = colors.accentText) }
-            } else {
-                TextButton(onClick = { vm.syncPair(row.id) }) { Text("发起配对", color = colors.accentText) }
-            }
+            TextButton(onClick = { vm.syncNow(row.id) }) { Text("立即同步", color = colors.accentText) }
             Spacer(Modifier.weight(1f))
             IconButton(onClick = { vm.syncForget(row.id) }, modifier = Modifier.size(36.dp)) {
                 Icon(
                     Icons.Default.Delete,
-                    contentDescription = if (row.paired) "忘记这台设备" else "移除",
+                    contentDescription = "不再与这台设备同步",
                     tint = colors.textMuted,
                     modifier = Modifier.size(18.dp),
                 )

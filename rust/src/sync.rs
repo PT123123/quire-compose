@@ -516,10 +516,12 @@ impl Session {
             last_sync: String::new(),
             self_device: true,
         }];
-        // Paired first, then the merely-discovered, each in the order the peer
-        // book holds them — which is the order they were first heard.
+        // **Online first**, then the order the peer book holds them — which is the
+        // order they were first heard. It used to be "paired first": a device that
+        // had announced sat below one that had not, which with pairing gone meant
+        // the device actually on the network was the second one on the list.
         let mut ordered: Vec<&PeerRecord> = peers.iter().filter(|p| p.id != me.id).collect();
-        ordered.sort_by_key(|p| !p.paired);
+        ordered.sort_by_key(|p| now.saturating_sub(p.last_seen) >= RECENT_ENOUGH_SECS);
         for p in ordered {
             rows.push(SyncRow {
                 id: p.id.clone(),
@@ -578,27 +580,26 @@ impl Session {
     }
 
     pub(crate) fn sync_now(&mut self, peer_id: &str) -> Result<(), String> {
+        // Any heard device (ADR-0029): the row exists because it announced, so
+        // there is nothing left to ask before dialling it.
         let peer = self
             .sync_peers()
             .into_iter()
-            .find(|p| p.id == peer_id && p.paired)
-            .ok_or_else(|| format!("没有已配对的设备: {peer_id}"))?;
+            .find(|p| p.id == peer_id)
+            .ok_or_else(|| format!("没有这个设备: {peer_id}"))?;
         self.sync.as_mut().map(|s| s.busy = true);
         self.sync_send(Cmd::SyncWith(peer))
     }
 
-    /// A round with every paired device that is still on the network — the
-    /// 刷新 button in 笔记 and 任务.
+    /// A round with every device still on the network — the 刷新 button in
+    /// 收件箱 and 任务.
     ///
     /// The same list the auto-sync timer dials, on purpose: a hand-started round
     /// and a background one that disagree about who is reachable is how a user
-    /// presses 刷新 and watches one of their devices quietly sit it out. Four
+    /// presses 刷新 and watches one of their devices quietly sit it out. Three
     /// things have to hold for a peer to be a target, and each is a way a round
     /// would otherwise fail rather than be skipped:
     ///
-    /// * paired — a discovered device is not a sync target. The round would run
-    ///   and the other side would drop the push (an unpaired push is refused on
-    ///   sight), and the peer table would end up claiming a pairing nobody made.
     /// * not this device — a record is its own peer in some tables, and dialling
     ///   yourself is a round that times out.
     /// * an address — nothing to dial without one; the device announces again in
@@ -606,8 +607,12 @@ impl Session {
     /// * announcing recently — one that stopped announcing has stopped listening
     ///   too, and `RECENT_ENOUGH_SECS` is the same window the page draws as 在线.
     ///
-    /// Returns the targets and, separately, the paired peers that were left out
-    /// by name. The timer drops those silently: nobody is waiting on a tick. The
+    /// There is no "paired" filter, and that is ADR-0029 rather than an omission:
+    /// a row only exists here at all because its announcement was heard, so
+    /// asking again whether it is trusted asks the same question twice.
+    ///
+    /// Returns the targets and, separately, the peers that were left out by
+    /// name. The timer drops those silently: nobody is waiting on a tick. The
     /// button cannot — the press asked for *this* round, and a round that
     /// quietly skipped a device is the one that looks like it worked.
     pub(crate) fn peers_due_for_a_round(&self) -> (Vec<PeerRecord>, Vec<String>) {
@@ -615,7 +620,7 @@ impl Session {
         let me = self.sync_self_info().id;
         let mut targets = Vec::new();
         let mut absent = Vec::new();
-        for peer in self.sync_peers().into_iter().filter(|p| p.paired) {
+        for peer in self.sync_peers() {
             let reachable = peer.id != me
                 && !peer.ip.is_empty()
                 && now.saturating_sub(peer.last_seen) < RECENT_ENOUGH_SECS;
@@ -633,7 +638,8 @@ impl Session {
         let (targets, absent) = self.peers_due_for_a_round();
         if targets.is_empty() {
             return Err(if absent.is_empty() {
-                "还没有配对任何设备 — 先在「同步」里配对一台。".to_string()
+                "还没有别的设备出现在这个网络上 — 打开另一台设备就会自动同步。"
+                    .to_string()
             } else {
                 format!("{} 不在本网络上 — 它重新广播后就会自动同步。", absent.join("、"))
             });
@@ -731,21 +737,21 @@ impl Session {
                     reply,
                     ..
                 } => {
-                    // An **inbound push** arrives with no kind: the core's server
-                    // has only the sender's own snapshot to name it by, and it
-                    // marks the record it invents `paired: true` on the strength
-                    // of the snapshot saying so. So this is the one place that can
-                    // ask whether the device is in this book at all — and without
-                    // the question, any machine that can reach the port could
-                    // rewrite this library. The desktop's pump asks the same one.
+                    // **No pairing gate** (ADR-0029): a device that announced
+                    // itself on this LAN is a device we sync with. The
+                    // announcement already carries its id in cleartext every four
+                    // seconds, so pairing was never a credential — it was a
+                    // question asked twice. What replaces it is the announcement
+                    // itself: `Job::Discovered` records the sender, and this branch
+                    // is reached by a device already heard from. A push from an
+                    // address we have *never* heard is still refused, which is the
+                    // one distinction left standing. The desktop's pump asks the
+                    // same one.
                     let inbound_push = peer.kind.is_empty();
-                    let known = self
-                        .sync_peers()
-                        .iter()
-                        .any(|p| p.id == peer.id && p.paired);
-                    if inbound_push && !known {
+                    let heard = self.sync_peers().iter().any(|p| p.id == peer.id);
+                    if inbound_push && !heard {
                         let message = format!(
-                            "{} 推送了快照但未配对 — 已拒绝",
+                            "{} 推送了快照，但它从未在网络上广播过 — 已拒绝",
                             if peer.name.is_empty() {
                                 "未知设备"
                             } else {
@@ -776,20 +782,22 @@ impl Session {
                         Some(true),
                     )
                     .ok();
-                    self.sync_log_push(&device.name, true, "已配对").ok();
+                    self.sync_log_push(&device.name, true, "已加入").ok();
                     changed = true;
                 }
                 Job::Discovered { device, ip } => {
+                    // Hearing a device is the whole of admitting it (ADR-0029) —
+                    // the same call the desktop's pump makes, so a device syncs
+                    // with one shell or the other, never with only one of them.
                     self.sync_note_device(
                         &device.id,
                         &device.name,
                         &device.kind,
                         &ip,
                         device.port,
-                        None,
+                        Some(true),
                     )
                     .ok();
-                    changed = true;
                 }
                 Job::Paired { device, ip } => {
                     self.sync_note_device(
@@ -801,7 +809,7 @@ impl Session {
                         Some(true),
                     )
                     .ok();
-                    self.sync_log_push(&device.name, true, "已配对").ok();
+                    self.sync_log_push(&device.name, true, "已加入").ok();
                     changed = true;
                 }
                 Job::SyncDone { peer_id, ok, message } => {
@@ -1166,6 +1174,65 @@ mod tests {
             snap.databases.is_empty(),
             "while the table's rows stay where they live"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A device in the peer book is a round's target, whatever `paired` says.**
+    ///
+    /// This is the shape of ADR-0029 stated as a test, at the one place it can be
+    /// reached without a socket: the row is written the way the engine writes it —
+    /// `sync_note_device` with `paired: true`, which is what `Job::Discovered`
+    /// does — and the rule is asked who it would dial. The old rule filtered on
+    /// `paired`, so the second half of this test (a row with the flag cleared,
+    /// which is what a peer book written by a *pre-ADR-0029* build contains) is the
+    /// case that used to be skipped and would have been left to the timeout sweep.
+    ///
+    /// It matters for the upgrade path rather than for a new install: a device
+    /// that paired months ago and has a stale `paired: false` row — a device that
+    /// was only ever discovered — would otherwise be invisible forever, because
+    /// nothing rewrites that flag any more.
+    #[test]
+    fn every_device_in_the_peer_book_is_a_rounds_candidate() {
+        let dir = scratch("target-rule");
+        let mut session = Session::open(dir.to_str().unwrap()).expect("open");
+        let now = quire_core::services::sync::engine::now_unix();
+
+        // The row the announcement produces.
+        session
+            .sync_note_device("dev-heard", "Tablet", "android", "192.168.1.8", 5878, Some(true))
+            .expect("record the heard device");
+        // A row from a peer book an older build wrote: heard, but never paired.
+        session
+            .sync_note_device("dev-stale", "Phone", "android", "192.168.1.9", 5878, Some(false))
+            .expect("record the stale row");
+        // …and one that has left the building.
+        session
+            .sync_note_device("dev-gone", "Laptop", "windows", "192.168.1.7", 5878, Some(true))
+            .expect("record the departed device");
+        let mut peers = session.sync_peers();
+        for p in peers.iter_mut() {
+            if p.id == "dev-gone" {
+                p.last_seen = now.saturating_sub(RECENT_ENOUGH_SECS + 60);
+            }
+        }
+        session.sync_set_peers(&peers).expect("write the book back");
+
+        let (targets, absent) = session.peers_due_for_a_round();
+        let ids: Vec<&str> = targets.iter().map(|p| p.id.as_str()).collect();
+        assert!(
+            ids.contains(&"dev-heard"),
+            "a device that just announced is dialled: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"dev-stale"),
+            "a row an older build left unpaired is still a device, not a stranger: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"dev-gone"),
+            "a device that stopped announcing is not dialled — that is the timeout: {ids:?}"
+        );
+        assert_eq!(absent, vec!["Laptop".to_string()], "and it is named: {absent:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -244,7 +244,16 @@ class Bridge(private val handle: Long) {
 
     fun syncSetName(name: String): Reply = send("syncSetName", "name" to name)
 
-    /** Pair with a device already heard on the wire. */
+    /**
+     * Pair with a device already heard on the wire.
+     *
+     * Kept for a peer still on an older build, which is the only thing that can
+     * send it: with pairing gone (ADR-0029) a device on this build is admitted by
+     * its announcement and never asks, so nothing in this shell's own UI calls
+     * this any more. The op itself is not removed — `/sync/pair` is part of the
+     * wire protocol in quire-core, and deleting one end of it would break a
+     * peer's round rather than tidy anything.
+     */
     fun syncPair(id: String): Reply = send("syncPair", "id" to id)
 
     fun syncNow(id: String): Reply = send("syncNow", "id" to id)

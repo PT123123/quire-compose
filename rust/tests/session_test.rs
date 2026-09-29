@@ -789,20 +789,26 @@ fn a_locked_page_does_not_lock_the_organizer() {
 
 /// **「刷新」with nothing to sync with says so, and says it in the user's words.**
 ///
-/// The 刷新 icon in 收件箱 and 任务 (ADR-0029) is a round with *every* paired
-/// device, so a library with no paired device is the case it hits first — the
-/// button is not even drawn then, but the request is reachable and must not be a
-/// panic or an empty success. The error is the half that matters: a 刷新 that
-/// reported "ok" while syncing with nobody is a round that looks like it worked.
+/// The 刷新 icon in 收件箱 and 任务 (ADR-0029) is a round with *every* device on
+/// the network, so a library that has heard no one is the case it hits first —
+/// the icon is not even drawn then, but the request is reachable (the pull
+/// gesture is too) and must not be a panic or an empty success. The error is the
+/// half that matters: a 刷新 that reported "ok" while syncing with nobody is a
+/// round that looks like it worked.
+///
+/// The wording is the *new* one, and that is deliberate. It used to say
+/// 「还没有配对任何设备」, which is now a question with no answer — pairing is
+/// gone, so a test still asserting that string would be pinning a dead concept
+/// and would pass again if someone reintroduced the gate.
 #[test]
-fn a_refresh_with_no_paired_device_says_why_instead_of_pretending() {
+fn a_refresh_with_no_device_says_why_instead_of_pretending() {
     let mut h = Harness::new("sync-refresh-empty");
     // syncState first, the way the 同步 page does, so the engine is running and
     // the failure below is about the peers rather than about the engine.
     h.ok(r#"{"op":"syncState"}"#);
     let error = h.err(r#"{"op":"syncNowAll"}"#);
     assert!(
-        error.contains("还没有配对任何设备"),
+        error.contains("还没有别的设备出现在这个网络上"),
         "the press should be told what is missing, got: {error}"
     );
 }

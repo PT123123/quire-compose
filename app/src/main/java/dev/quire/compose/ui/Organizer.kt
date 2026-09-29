@@ -27,9 +27,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -66,8 +68,10 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +83,9 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -99,12 +106,14 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.quire.compose.QuireViewModel
 import dev.quire.compose.bridge.OrgCatalog
 import dev.quire.compose.bridge.SyncState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
@@ -364,17 +373,18 @@ fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
  * which of the devices has it is the question they did not ask. The desktop's
  * 刷新 is the same round against the same rule.
  *
- * Drawn only with a paired peer to dial ([SyncState.peers] is paired, excluding
- * this device) — a button whose only possible answer is "还没有配对任何设备" is
- * a button in the way, and the 同步 page is where pairing happens. A round in
- * flight turns the glyph into a spinner: the same treatment the 同步 page's own
- * bar gives, so "it is working" looks the same in both places.
+ * Drawn only with a device to dial ([SyncState.devices] is every device heard,
+ * this one excluded) — a button whose only possible answer is "没听到别的设备"
+ * is a button in the way, and this one is in the organizer rather than on the
+ * 同步 page. A round in flight turns the glyph into a spinner: the same
+ * treatment the 同步 page's own bar gives, so "it is working" looks the same in
+ * both places.
  */
 @Composable
 private fun OrgRefreshAction(vm: QuireViewModel) {
     val colors = LocalQuireColors.current
     val sync = vm.view?.sync ?: SyncState.Empty
-    if (sync.peers.isEmpty()) return
+    if (sync.devices.isEmpty()) return
     IconButton(onClick = vm::syncNowAll, enabled = !sync.busy) {
         if (sync.busy) {
             CircularProgressIndicator(
@@ -583,10 +593,21 @@ fun NotesPage(vm: QuireViewModel) {
                 )
             }
 
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 96.dp),
+            // The pull gesture wraps the list, not the column: the filter chips
+            // above it are the page's furniture, and a refresh that dragged them
+            // down with the cards would read as the whole page moving.
+            val listState = rememberLazyListState()
+            val sync = vm.view?.sync ?: SyncState.Empty
+            OrgPullRefresh(
+                state = listState,
+                busy = sync.busy,
+                onRefresh = vm::syncNowAll,
             ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 96.dp),
+                ) {
                 items(rows, key = { it.id }) { row ->
                     NoteCardView(
                         row = row,
@@ -628,6 +649,7 @@ fun NotesPage(vm: QuireViewModel) {
                             },
                         )
                     }
+                }
                 }
             }
         }
@@ -856,8 +878,22 @@ fun TasksPage(vm: QuireViewModel) {
             if (board && !vm.orgBin) {
                 BoardPane(catalog = catalog, dates = dates, vm = vm, hidden = hidden)
             } else {
-                LazyColumn(
+                // The same pull as the notes list, and for the same reason: both
+                // are the pages a note is *read* on, so both are the pages a
+                // refresh is wanted on. The board is left alone — its columns
+                // scroll sideways and a vertical pull there is a different gesture
+                // with a different meaning.
+                val listState = rememberLazyListState()
+                val sync = vm.view?.sync ?: SyncState.Empty
+                OrgPullRefresh(
+                    state = listState,
+                    busy = sync.busy,
+                    onRefresh = vm::syncNowAll,
                     modifier = Modifier.weight(1f),
+                ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 88.dp),
                 ) {
                     items(rows, key = { it.id }) { row ->
@@ -892,6 +928,7 @@ fun TasksPage(vm: QuireViewModel) {
                             )
                         }
                     }
+                }
                 }
                 TaskProgressFooter(
                     done = done,
@@ -2072,7 +2109,19 @@ private fun OrgChip(
         modifier = Modifier
             .height(if (small) 30.dp else 34.dp)
             .clip(RoundedCornerShape(Radius.sm))
-            .background(if (selected) colors.surfaceSelected else Color.Transparent)
+            // **A selected chip is a state, not an emphasis.** The fill was
+            // `surfaceSelected`, which is 22% accent — a blue plate for 全部笔记,
+            // which is lit by default and therefore needs no advertisement. It is
+            // now the surface one step up from the page, with a border so the chip
+            // still reads as a chip rather than as a label. Same change as the
+            // desktop's `OrgFilterChip`; the accent keeps its job for a round in
+            // flight and for the 清除筛选 affordance.
+            .background(if (selected) colors.surfaceHover else Color.Transparent)
+            .border(
+                1.dp,
+                if (selected) colors.border else Color.Transparent,
+                RoundedCornerShape(Radius.sm),
+            )
             .then(
                 if (onLongClick != null) {
                     Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
@@ -2593,3 +2642,122 @@ private fun OrgEmpty(text: String, hint: String) {
         Text(hint, style = QuireType.caption, color = colors.textMuted.copy(alpha = 0.8f))
     }
 }
+
+/**
+ * Pull down to refresh, over a list.
+ *
+ * Material 3's own `PullToRefreshBox` is the right widget and it is not available
+ * here: this build is on compose-bom 2024.06.00, and that API landed in
+ * material3 1.3 — taking it would mean bumping the BOM under every screen in the
+ * app to get one gesture. So this is the same idea in ~60 lines, on
+ * [NestedScrollConnection], which is the mechanism the widget uses underneath and
+ * which costs no dependency at all.
+ *
+ * The contract it keeps, and the reason it is a nested-scroll connection rather
+ * than a `pointerInput` on the list:
+ *
+ * * **It only pulls when the list is already at the top.** The connection reads
+ *   `LazyListState.firstVisibleItemIndex` and, once past row 0, hands every delta
+ *   straight back with `available = 0` — so a scroll *up* through the list is the
+ *   list's own fling and nothing here touches it. Without that check a pull would
+ *   fight every upward scroll, which is the classic way this gesture goes wrong.
+ * * **The pull is rubber-banded and capped** at [THRESHOLD], so a long drag cannot
+ *   drag the header off the screen, and the further you pull past the threshold the
+ *   less it gives — the standard resistance curve, one line.
+ * * **A refresh in flight cannot be pulled again.** `busy` comes from the sync
+ *   state, so the indicator and the button in the bar are the same fact on two
+ *   surfaces, and a second pull while a round is running does nothing rather than
+ *   queueing a second one.
+ *
+ * `onRefresh` is a *request*, and this component does not wait for it: the view
+ * answers with the round's progress through `busy`, so the spinner stays up for
+ * as long as the round really is. That is the same contract the 刷新 button has.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OrgPullRefresh(
+    state: LazyListState,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val colors = LocalQuireColors.current
+    val scope = rememberCoroutineScope()
+    // The drag distance, in pixels, and the direction it was last travelling. A
+    // state rather than a ref because the header's offset is what draws the
+    // gesture; `remember` keeps it across recomposition and forgets it when the
+    // list leaves the screen, which is right — a half-finished pull is not
+    // something to restore on the way back.
+    var pull by remember { mutableFloatStateOf(0f) }
+    val connection = remember(state) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // Released upward while a pull is showing: close it, and keep the
+                // leftover drag out of the list so the header does not jump.
+                if (available.y > 0f && pull > 0f) {
+                    val taken = minOf(available.y, pull)
+                    pull = (pull - taken).coerceAtLeast(0f)
+                    return Offset(0f, taken)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                // `onPreScroll` is where a pull is *spent*; this is the leftover a
+                // child could not use, which is the over-scroll at the top.
+                if (available.y <= 0f || busy) return Offset.Zero
+                if (state.firstVisibleItemIndex > 0 || state.firstVisibleItemScrollOffset > 0) {
+                    return Offset.Zero
+                }
+                val resistance = (1f - (pull / PULL_MAX)).coerceIn(0.12f, 1f)
+                pull = (pull + available.y * resistance).coerceIn(0f, PULL_MAX)
+                return Offset(0f, available.y)
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (pull < THRESHOLD) {
+                    pull = 0f
+                    return Velocity.Zero
+                }
+                // Past the threshold: this is the gesture the user meant. Close the
+                // header immediately — waiting for `busy` would leave it hanging
+                // there for the length of the round — and ask for the round.
+                pull = 0f
+                scope.launch { onRefresh() }
+                return Velocity.Zero
+            }
+        }
+    }
+    Box(modifier = modifier.nestedScroll(connection)) {
+        // The header rides *under* the list, so the list draws over it and the
+        // gap between the first row and the filter bar is the pull made visible.
+        // It is drawn first and clipped by the same box, which is what makes the
+        // rows appear to push it down rather than a bar sliding in from nowhere.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .height(with(LocalDensity.current) { pull.toDp() }),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (pull > 1f) {
+                val armed = pull >= THRESHOLD
+                Icon(
+                    imageVector = if (busy) Icons.Default.Refresh else if (armed) IcUndo else Icons.Default.Refresh,
+                    contentDescription = null,
+                    tint = if (armed) colors.accent else colors.textMuted,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        content()
+    }
+}
+
+private const val THRESHOLD = 96f
+private const val PULL_MAX = 220f
+

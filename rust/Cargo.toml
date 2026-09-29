@@ -29,7 +29,11 @@ crate-type = ["cdylib", "rlib"]
 # (`Cmd::ProbeAdd`), which this shell no longer offers. Bump it only once that
 # commit is on `origin`: a shell cannot build against an unpublished commit, so the
 # core lands and is pushed first and the pin follows.
-quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "5a6b103103d399368e93cd77df9011f050af80ea" }
+#
+# `bc6f55a` adds core ADR-0005 (a `busy_timeout`), which is a fix rather than a
+# change: the wire format, the snapshot version and the merge are all untouched, so
+# a peer on the previous rev still syncs with this one.
+quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "bc6f55a" }
 jni = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
