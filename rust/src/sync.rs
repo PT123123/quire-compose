@@ -70,12 +70,25 @@ const KEY_PEERS: &str = "sync.peers";
 const KEY_LOG: &str = "sync.log";
 const KEY_AUTO: &str = "sync.auto";
 const KEY_INTERVAL: &str = "sync.interval";
-/// The measured floor, the desktop's own: a peer hammered every second is worse
-/// than one synced a minute late.
-const MIN_INTERVAL: u64 = 15;
+/// The measured floor: a peer hammered every second is worse than one synced a
+/// minute late. It was 15 while the page's own fastest preset said 10, so
+/// choosing 10 秒 stored 15 — the floor has to be at or below the presets it
+/// admits, or the preset is a lie.
+const MIN_INTERVAL: u64 = 10;
+/// What the interval is when nobody has chosen one: a phone on mobile data is
+/// not the place to dial the LAN every ten seconds.
 const DEFAULT_INTERVAL: u64 = 60;
+/// The cadence this shell runs at while it is on Wi-Fi (ADR-0032). The desktop
+/// has no equivalent because it has no metered link to be careful with — it sits
+/// at this number unconditionally. A phone only reaches it by being on Wi-Fi,
+/// which is the whole of the difference between the two shells.
+pub const AGGRESSIVE_INTERVAL: u64 = 10;
 /// How many log lines are kept. Newest last.
 const LOG_CAP: usize = 50;
+/// How soon after a content write the timer may push it ahead of its window.
+/// Two seconds, so a burst of keystrokes settles before the round goes — every
+/// keystroke refreshes `dirty_at`, which makes this the typing debounce too.
+const WRITE_KICK_SECS: u64 = 2;
 /// A device is auto-synced while its announcement is recent. The announcer
 /// speaks every 4 s, so this leaves room for a missed beat or two — and a peer
 /// that stopped announcing is a peer whose server stopped too, which is the
@@ -130,7 +143,15 @@ pub struct SyncView {
     /// This device's LAN address, or `""` when there is no route.
     pub self_address: String,
     pub auto: bool,
+    /// What the user chose — the chips draw this.
     pub interval: u64,
+    /// What the timer is actually running at, which is not the same on Wi-Fi
+    /// (ADR-0032). The page draws this one beside the chips, because a chip
+    /// reading 「30 分」 while the timer fires every 10 秒 is the page telling
+    /// the truth about one thing and lying about the other.
+    pub effective_interval: u64,
+    /// Whether the shell has said this device is on Wi-Fi.
+    pub on_wifi: bool,
     pub port: u16,
     pub discovery_port: u16,
     /// A sync cycle is in flight.
@@ -199,6 +220,17 @@ impl Sync {
 
     pub fn running(&self) -> bool {
         self.unsyncable.is_none()
+    }
+
+    /// Let the next pump send a round at once, rather than finishing out the
+    /// window the previous cadence started (ADR-0032).
+    ///
+    /// The device just arrived on Wi-Fi. Under the relaxed cadence the next
+    /// round could be most of a minute away, which is precisely the wait the
+    /// aggressive one exists to remove — so arriving is itself a reason to go
+    /// now. A no-op when the engine was never started: there is no pump to wake.
+    pub(crate) fn round_now(&mut self) {
+        self.last_auto = 0;
     }
 }
 
@@ -449,6 +481,30 @@ impl Session {
             .max(MIN_INTERVAL)
     }
 
+    /// The interval the timer actually runs at, which is not always the stored
+    /// one (ADR-0032).
+    ///
+    /// On Wi-Fi the desktop's own cadence — a round every
+    /// [`AGGRESSIVE_INTERVAL`] seconds — is the default, without the user
+    /// having to have chosen it and without a visit to any page. A stored
+    /// *slower* value is overridden, because the point of this shell's rule is
+    /// that Wi-Fi is the aggressive transport: 「60 秒 because that is what the
+    /// setting says」 on a home LAN, where a round costs each device a few
+    /// milliseconds, is the setting quietly overriding the transport. A stored
+    /// value that is *faster* still wins — the user asked for less waiting than
+    /// the floor and should get it.
+    ///
+    /// Off Wi-Fi there is nothing to override: mobile data is the reason this
+    /// half of the policy exists, so the stored value stands, and its default
+    /// is the relaxed one.
+    pub(crate) fn sync_effective_interval(&self) -> u64 {
+        if self.on_wifi {
+            self.sync_interval().min(AGGRESSIVE_INTERVAL)
+        } else {
+            self.sync_interval()
+        }
+    }
+
     pub(crate) fn sync_set_auto(&mut self, on: bool) -> Result<(), String> {
         self.put_sync_setting(KEY_AUTO, if on { "1" } else { "0" })
     }
@@ -563,6 +619,8 @@ impl Session {
             self_address: rows[0].address.clone(),
             auto: self.sync_auto(),
             interval: self.sync_interval(),
+            effective_interval: self.sync_effective_interval(),
+            on_wifi: self.on_wifi,
             port: SYNC_PORT,
             discovery_port: DISCOVERY_PORT,
             busy,
@@ -831,18 +889,28 @@ impl Session {
             }
         }
 
-        // The auto-sync timer: on, idle, and the interval has passed.
+        // The auto-sync timer: on, idle, and the interval has passed — or a
+        // fresh content write is waiting, which goes inside
+        // [`WRITE_KICK_SECS`] rather than sitting out the rest of the window.
         let auto = self.sync_auto();
-        let interval = self.sync_interval();
+        let interval = self.sync_effective_interval();
         let now = quire_core::services::sync::engine::now_unix();
+        let dirty = self.dirty_at.get();
+        let write_due = dirty > 0 && now.saturating_sub(dirty) >= WRITE_KICK_SECS;
         let due = match self.sync.as_ref() {
-            Some(s) => auto && !s.busy && s.running() && now.saturating_sub(s.last_auto) >= interval,
+            Some(s) => {
+                auto
+                    && !s.busy
+                    && s.running()
+                    && (now.saturating_sub(s.last_auto) >= interval || write_due)
+            }
             None => false,
         };
         if due {
             if let Some(s) = self.sync.as_mut() {
                 s.last_auto = now;
             }
+            self.dirty_at.set(0);
             let (peers, _absent) = self.peers_due_for_a_round();
             if !peers.is_empty() {
                 if let Some(s) = self.sync.as_mut() {

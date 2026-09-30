@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -268,19 +270,41 @@ fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
 
             HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
             SheetHeader("关于")
-            Text(
-                text = "Quire 的原生 Android 外壳：Kotlin + Jetpack Compose 画界面，" +
-                    "quire-core 管数据。资料库与 Rust 外壳共用同一份 quire.db。",
-                style = QuireType.caption,
-                color = colors.textMuted,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-            )
-            Text(
-                text = "${view.pageCount} 个页面 · 主题 ${view.theme}",
-                style = QuireType.caption,
-                color = colors.textMuted,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
-            )
+            // **The strings a user is asked for about the app are the ones a `Text`
+            // could not give** (ADR-0031, the desktop's ADR-0135 from its side): a
+            // plain `Text` holds no selection, so the version — the one string a
+            // bug report needs — had to be retyped by hand. Long-press now selects,
+            // and the system's copy bar does the rest. The headers above stay
+            // chrome: copying a heading is not a thing anyone needs.
+            SelectionContainer {
+                Column {
+                    val context = LocalContext.current
+                    val version = remember(context) {
+                        runCatching {
+                            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                        }.getOrNull() ?: "—"
+                    }
+                    Text(
+                        text = "Quire 的原生 Android 外壳：Kotlin + Jetpack Compose 画界面，" +
+                            "quire-core 管数据。资料库与 Rust 外壳共用同一份 quire.db。",
+                        style = QuireType.caption,
+                        color = colors.textMuted,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                    )
+                    Text(
+                        text = "${view.pageCount} 个页面 · 主题 ${view.theme}",
+                        style = QuireType.caption,
+                        color = colors.textMuted,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                    )
+                    Text(
+                        text = "版本 $version",
+                        style = QuireType.caption,
+                        color = colors.textMuted,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                    )
+                }
+            }
         }
     }
 }

@@ -111,4 +111,50 @@ class SyncModelTest {
         assertTrue(view.sync.rows.isEmpty())
         assertEquals(60L, view.sync.interval)
     }
+
+    /**
+     * ADR-0032's two new fields survive the crossing, and the aggressive half
+     * arrives as a *different number* from the stored one.
+     *
+     * The distinction is the whole feature: `interval` is the chip the user
+     * pressed and `effectiveInterval` is what the timer does. Parsing one field
+     * into both would leave the page drawing 「30 分」 over a 10-second timer
+     * while every assertion in the suite passed — so both are read here, and
+     * required to differ.
+     */
+    @Test
+    fun the_cadence_in_force_is_not_the_one_that_was_chosen() {
+        val wifi = """
+            {"ok":true,"view":{"pages":[],"blocks":[],"recents":[],"favorites":[],
+             "org":{"notes":[],"tasks":[],"lists":[]},
+             "sync":{"running":true,"selfId":"a","selfName":"手机","selfAddress":"",
+                     "auto":true,"interval":1800,"effectiveInterval":10,"onWifi":true,
+                     "port":5878,"discoveryPort":5879,"busy":false,"status":"",
+                     "rows":[],"log":[]}}}
+        """.trimIndent()
+        val sync = (parseReply(wifi) as Reply.Updated).view.sync
+
+        assertEquals(1800L, sync.interval)
+        assertEquals(10L, sync.effectiveInterval)
+        assertTrue(sync.onWifi)
+    }
+
+    /**
+     * A bridge that predates ADR-0032 sends neither field, and the missing
+     * `effectiveInterval` must not become an invented number.
+     *
+     * The honest default for "no transport was ever reported" is the stored
+     * interval — the relaxed one — because a session that has not been told it is
+     * on Wi-Fi is not evidence that it is. Defaulting `effectiveInterval` to 10
+     * instead would put every un-updated reply into a cadence the device never
+     * agreed to, which is the direction that costs battery.
+     */
+    @Test
+    fun an_older_bridge_reports_no_transport_and_no_aggression() {
+        val view = (parseReply(body) as Reply.Updated).view
+        assertFalse(view.sync.onWifi)
+        assertEquals(
+            view.sync.interval, view.sync.effectiveInterval,
+        )
+    }
 }

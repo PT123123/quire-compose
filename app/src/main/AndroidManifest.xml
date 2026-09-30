@@ -8,6 +8,13 @@
          broadcasts leaves 已发现的设备 empty rather than offering a by-hand door. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Which transport the default route uses (ADR-0032). Normal permission,
+         no prompt: it is how the sync cadence knows whether this device is on
+         Wi-Fi, so a phone on mobile data does not dial the LAN every ten
+         seconds. `ConnectivityManager` cannot answer it without this, and it is
+         the only new permission the aggressive-on-Wi-Fi policy costs. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"

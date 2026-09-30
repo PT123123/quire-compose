@@ -19,13 +19,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -97,11 +97,10 @@ fun SyncBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
                 CircularProgressIndicator(color = colors.accent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(Spacing.sm))
             }
-            // 刷新并立即同步 — the reference app's one toolbar action: a burst of
-            // discovery, and a cycle with every peer that is due.
-            IconButton(onClick = vm::openSync) {
-                Icon(Icons.Default.Refresh, contentDescription = "刷新并立即同步", tint = colors.textSecondary)
-            }
+            // The bar carries no refresh button: the round the button asked for
+            // is a pull away — the page is a list like 笔记 and 任务, and the
+            // same pull-to-refresh hangs off it. What is left here is the
+            // spinner, which says "it is working" while a round runs.
         },
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = colors.background,
@@ -114,49 +113,65 @@ fun SyncBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
 fun SyncPage(vm: QuireViewModel) {
     val sync = vm.view?.sync ?: SyncState.Empty
 
-    // Entering the page is what starts the engine and the announcements. It is
-    // idempotent on the Rust side, so coming back to the page is free.
+    // Already running: the app sent `syncOpen` at launch (ADR-0032). This is the
+    // page's own read, and it pumps the engine — so it is not merely opening a
+    // screen any more, only refreshing what the app has been doing since the
+    // user arrived. Idempotent on the Rust side either way.
     LaunchedEffect(Unit) { vm.openSync() }
 
     var name by remember(sync.selfName) { mutableStateOf(sync.selfName) }
 
-    LazyColumn(
+    // The pull is the page's one refresh verb now that the bar has no button:
+    // the same gesture 笔记 and 任务 give, asking for the page's own read again
+    // — a burst of discovery and the peers table re-read (idempotent on the
+    // Rust side, like the LaunchedEffect above). While a round runs, `busy`
+    // holds the gesture off rather than queueing a second one.
+    val listState = rememberLazyListState()
+    QuirePullRefresh(
+        state = listState,
+        busy = sync.busy,
+        onRefresh = vm::openSync,
         modifier = Modifier.fillMaxSize().imePadding(),
-        contentPadding = PaddingValues(bottom = 48.dp),
     ) {
-        item(key = "banner") { SyncBanner(sync) }
-        sync.unsyncable?.let { why ->
-            item(key = "gate") { SyncGate(why) }
-        }
-        item(key = "self") { SyncSelf(sync) }
-
-        item(key = "peers-header") { SyncSection("本网络上的设备") }
-        if (sync.devices.isEmpty()) {
-            item(key = "peers-empty") {
-                SyncEmpty("没听到别的设备 —— 打开另一台设备就会自动同步，不需要任何设置。")
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 48.dp),
+        ) {
+            item(key = "banner") { SyncBanner(sync) }
+            sync.unsyncable?.let { why ->
+                item(key = "gate") { SyncGate(why) }
             }
-        }
-        items(sync.devices, key = { "device-${it.id}" }) { row -> SyncDevice(row = row, vm = vm) }
+            item(key = "self") { SyncSelf(sync) }
 
-        item(key = "settings") {
-            SyncSettings(
-                sync = sync,
-                name = name,
-                onName = { name = it },
-                vm = vm,
-            )
-        }
+            item(key = "peers-header") { SyncSection("本网络上的设备") }
+            if (sync.devices.isEmpty()) {
+                item(key = "peers-empty") {
+                    SyncEmpty("没听到别的设备 —— 打开另一台设备就会自动同步，不需要任何设置。")
+                }
+            }
+            items(sync.devices, key = { "device-${it.id}" }) { row -> SyncDevice(row = row, vm = vm) }
 
-        item(key = "log-header") { SyncSection("最近记录") }
-        if (sync.log.isEmpty()) {
-            item(key = "log-empty") { SyncEmpty("还没有记录。") }
+            item(key = "settings") {
+                SyncSettings(
+                    sync = sync,
+                    name = name,
+                    onName = { name = it },
+                    vm = vm,
+                )
+            }
+
+            item(key = "log-header") { SyncSection("最近记录") }
+            if (sync.log.isEmpty()) {
+                item(key = "log-empty") { SyncEmpty("还没有记录。") }
+            }
+            // Newest first, and a handful of them: the log is a reassurance, not a
+            // console (the reference app has a whole page for that).
+            itemsIndexed(sync.log.asReversed().take(12), key = { index, _ -> "log-$index" }) { _, line ->
+                SyncLogLine(line)
+            }
+            item(key = "foot") { SyncFoot() }
         }
-        // Newest first, and a handful of them: the log is a reassurance, not a
-        // console (the reference app has a whole page for that).
-        itemsIndexed(sync.log.asReversed().take(12), key = { index, _ -> "log-$index" }) { _, line ->
-            SyncLogLine(line)
-        }
-        item(key = "foot") { SyncFoot() }
     }
 }
 
@@ -180,7 +195,7 @@ private fun SyncBanner(sync: SyncState) {
             text = if (sync.running) {
                 "广播发现运行中 —— 同一局域网内的设备会自动出现在下面（UDP ${sync.discoveryPort} / HTTP ${sync.port}）"
             } else {
-                "还没开始 —— 停留在本页面即会开启广播发现"
+                "还没启动 —— 打开应用即会自动开始，无需任何设置"
             },
             style = QuireType.caption,
             color = colors.textSecondary,
@@ -359,8 +374,10 @@ private fun SyncSettings(sync: SyncState, name: String, onName: (String) -> Unit
 
         Text("自动同步", style = QuireType.caption, color = colors.textMuted)
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
-            // The reference app's three presets, plus 手动: Wi-Fi 期间按 10 秒 /
-            // 1 分 / 5 分 / 30 分，或者只在我按的时候。
+            // The presets are what to *ask for*; the line under them says what
+            // the timer is actually doing, which on Wi-Fi is a faster number
+            // than any of these (ADR-0032). Without that line a chip reading
+            // 「30 分」 over a 10-second timer is the page contradicting itself.
             for ((label, seconds) in listOf("10 秒" to 10L, "1 分" to 60L, "5 分" to 300L, "30 分" to 1800L)) {
                 SyncChoice(
                     label = label,
@@ -375,6 +392,23 @@ private fun SyncSettings(sync: SyncState, name: String, onName: (String) -> Unit
                 label = "仅手动",
                 selected = !sync.auto,
                 onClick = { vm.syncSetAuto(false) },
+            )
+        }
+
+        // What the timer is doing, not what was asked for. On Wi-Fi the answer
+        // is the desktop's 10 秒 and the chips above are a ceiling rather than
+        // the number in force; off Wi-Fi it is the chosen interval, and the
+        // reason it is not the aggressive one is the sentence's whole job.
+        val showingInterval = sync.effectiveInterval != sync.interval
+        if (sync.auto && (showingInterval || !sync.onWifi)) {
+            Text(
+                text = if (sync.onWifi) {
+                    "已在 Wi-Fi 下，实际每 ${sync.effectiveInterval} 秒同步一次"
+                } else {
+                    "未连接 Wi-Fi，按所选间隔每 ${sync.effectiveInterval} 秒同步一次"
+                },
+                style = QuireType.caption,
+                color = colors.textMuted,
             )
         }
 

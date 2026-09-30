@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.quire.compose.bridge.Bridge
 import dev.quire.compose.bridge.Native
+import dev.quire.compose.bridge.Network
 import dev.quire.compose.bridge.OrgCatalog
 import dev.quire.compose.bridge.Reply
 import dev.quire.compose.bridge.View
@@ -85,6 +86,29 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     private var foreground = false
     private var closed = false
 
+    /**
+     * The library answered `open`. Before it, a sync call would be answered
+     * 「the library is not open」 and land as an error bar — so the
+     * return-to-foreground catch-up waits for this, the same gate the network
+     * observer sits behind.
+     */
+    private var opened = false
+
+    /**
+     * The transport last reported to the session, so a callback that repeats the
+     * current one is not sent again.
+     *
+     * `ConnectivityManager` fires `onAvailable` more than once for one physical
+     * change, and a `syncTransport` per callback would put a bridge call on every
+     * network flap — a round's worth of nothing, several times a minute. Also
+     * `null` before the launch sets it, so the first callback is a real change
+     * and is sent even if it agrees with what launch already said.
+     */
+    private var lastWifi: Boolean? = null
+
+    /** Undoes [Network.observe]. `null` until it is registered. */
+    private var stopWatchingNetwork: (() -> Unit)? = null
+
     init {
         viewModelScope.launch {
             // `internalDataPath` on the Rust side was `<files>/Quire`, the same
@@ -92,23 +116,55 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
             // between the two shells without the store noticing which it is on.
             val dataDir = File(getApplication<Application>().filesDir, "Quire").absolutePath
             apply(withContext(bridgeDispatcher) { bridge.open(dataDir) })
+            opened = true
+            // The library is open, so the session can answer a sync round.
+            // Starting it here rather than on a visit to 同步 is the whole of
+            // 「进入界面就打开同步」(ADR-0032).
+            syncStart()
+            // Registered only now, and not in `init` beside it: a dispatch sent
+            // before `open` lands is answered with 「the library is not open」,
+            // which would surface as an error banner the user cannot act on.
+            // `ConnectivityManager` fires its first `onAvailable` within
+            // milliseconds of registration, so the initial transport still comes
+            // out of here — as the `lastWifi` guard below turns the duplicate
+            // into no second bridge call.
+            val app = getApplication<Application>()
+            lastWifi = Network.isOnWifi(app)
+            stopWatchingNetwork = Network.observe(app) { wifi ->
+                if (wifi == lastWifi) return@observe
+                lastWifi = wifi
+                syncStart(kick = wifi)
+            }
         }
         // The writer's clock. Ticking while backgrounded would keep a wakeup
         // every second for a queue that is already empty, so the loop runs but
-        // the work does not.
+        // the work does not. The reply is not dropped: the tick is also LAN
+        // sync's heartbeat, and a round that finished under it answers with the
+        // whole view — applying it here is what makes a peer's edits appear on
+        // their own, without a pull or a page visit to fetch them.
         viewModelScope.launch {
             while (true) {
                 delay(TICK_MS)
-                if (foreground) withContext(bridgeDispatcher) { bridge.tick() }
+                if (foreground) {
+                    val reply = withContext(bridgeDispatcher) { bridge.tick() }
+                    (reply as? Reply.Updated)?.let(::apply)
+                }
             }
         }
     }
 
-    /** The app came to the front (tick) or went away (write now). */
+    /** The app came to the front (tick, plus a sync catch-up) or went away (write now). */
     fun setForeground(front: Boolean) {
         if (front == foreground) return
         foreground = front
-        if (!front) flush()
+        if (front) {
+            // Back in front after being away: whatever a peer pushed while the
+            // phone was asleep is a round away, not a window away. Idempotent,
+            // and gated on `opened` because `onStart` can beat the library.
+            if (opened) syncStart(kick = true)
+        } else {
+            flush()
+        }
     }
 
     fun dismissNotice() {
@@ -171,10 +227,6 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     fun indentList(block: Long) = act { bridge.indentList(block) }
 
     fun outdentList(block: Long) = act { bridge.outdentList(block) }
-
-    fun undo() = act { bridge.undo() }
-
-    fun redo() = act { bridge.redo() }
 
     // ─── links ──────────────────────────────────────────────────────────────
     //
@@ -307,9 +359,29 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * The open note, or `-1` for the list. A note opens on a **page of its own**
      * rather than in the capture sheet (ADR-0015), so this is the note half of
-     * what `orgTaskSel` is to 任务.
+     * what `orgTaskSel` is to 任务. Since the 单击只选中 round (ADR-0031) its
+     * writers are the menu's 详情 / 详细信息, the reply jumps and the comment
+     * rows — **never a tap on a card**.
      */
     var orgNoteSel by mutableStateOf(-1L)
+        private set
+
+    /**
+     * The lit row: the note a tap points at, and **all** a tap does (ADR-0031).
+     * The open note and the lit one are two values on purpose — a list that
+     * replaced itself on every look is a list that cannot be read — and the lit
+     * row is what the list paints, through [OrgModel.notes]' `selected`.
+     */
+    var orgNoteLit by mutableStateOf(-1L)
+        private set
+
+    /**
+     * 详细信息 asked for on the way in: the menu's 详细信息 opens the note page
+     * with the sheet already up, the way 详情 opens it with it down. Written by
+     * every [orgSelectNote], so a jump to another row from an open page cannot
+     * inherit the sheet the arrival before it asked for.
+     */
+    var orgNoteDetailsOpen by mutableStateOf(false)
         private set
 
     /** The capture sheet's state, and the text in it. */
@@ -340,6 +412,22 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun consumeOrgFocus() {
         orgFocus = null
+    }
+
+    /**
+     * The note a send just made, waiting for the list to scroll to it.
+     *
+     * ➤ on the capture sheet answers with the whole catalog, and the new row is
+     * found by difference — the same trick [orgFocus] uses — but a note does not
+     * take a caret: it takes a place on the list the finger is already on. The
+     * id is cleared by the list once it has scrolled there
+     * ([consumeOrgScrollToNote]), so a rotation does not scroll again.
+     */
+    var orgScrollToNote by mutableStateOf(-1L)
+        private set
+
+    fun consumeOrgScrollToNote() {
+        orgScrollToNote = -1L
     }
 
     /**
@@ -374,6 +462,8 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         orgCompose = Compose.Closed
         orgTaskSel = -1
         orgNoteSel = -1
+        orgNoteLit = -1
+        orgNoteDetailsOpen = false
         // A selection does not cross destinations: the ids a page picked mean
         // nothing to the other one.
         orgSelecting = false
@@ -545,6 +635,8 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         val ids = orgSelection.toSet()
         orgStopSelecting()
         for (id in ids) act { bridge.orgTaskDone(id, done) }
+        // One bar for the batch, and its 撤销 unticks every row it covered.
+        offerChange(ids, done)
     }
 
     /** `-1` closes the detail — the back gesture, and the back chevron. */
@@ -565,6 +657,10 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun orgOpenNoteMenu(id: Long) {
+        // The highlight follows the question (ADR-0031): the menu's verbs act on
+        // the note it was opened for, and the row lighting as the menu arrives is
+        // what says which one that is.
+        orgNoteLit = id
         orgNoteMenu = id
     }
 
@@ -601,13 +697,37 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Tapping a card opens the note on a **page of its own** (ADR-0015), the way
-     * the reference app edits a note. The capture sheet is for making one thing
-     * quickly; a note being read and revised wants the whole screen.
+     * Open a note on a **page of its own** (ADR-0015), the way the reference app
+     * edits a note. A tap on a card is not one of this function's callers any
+     * more: pointing only lights the row ([orgMarkNote]), and the page is the
+     * menu's 详情 / 详细信息 — the pair the desktop's ADR-0137 named, which
+     * is why `details` exists (the page arrives with the sheet already up).
      */
-    fun orgSelectNote(id: Long) {
+    fun orgSelectNote(id: Long, details: Boolean = false) {
         orgNoteSel = id
+        orgNoteDetailsOpen = details
         orgNoteMenu = null
+    }
+
+    /**
+     * A tap on a note card: **lights the row and stops there** (ADR-0031). This
+     * used to open the page, which meant reading a list meant leaving it five
+     * times; the desktop took the raise off its click for the same reason. The
+     * lit row is also what the ⋯ menu's verbs are then seen to act on.
+     */
+    fun orgMarkNote(id: Long) {
+        orgNoteLit = id
+    }
+
+    /**
+     * The note page's ← and the back gesture: the page goes, and the highlight
+     * goes with it — putting the selection down is what closing the page is, the
+     * same rule the desktop's ✕ states.
+     */
+    fun orgCloseNote() {
+        orgNoteSel = -1
+        orgNoteLit = -1
+        orgNoteDetailsOpen = false
     }
 
     /** The note page's 评论, and a comment row's ＋: the capture overlay, in reply mode. */
@@ -674,8 +794,31 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
      * both travel in **one** command, so a note the user typed is one press of 撤销
      * away. The derivation is [MarkdownText]'s, which is where the toolbar's rules
      * live and where they are tested.
+     *
+     * The reply's new row is found by difference and handed to the list as
+     * [orgScrollToNote] — lit (`orgNoteLit`) and scrolled to, so the row the send
+     * just made is the one on screen rather than wherever the list happened to
+     * stand (ADR-0031's lit row is what the card then paints).
      */
-    fun orgAddNote(body: String) = act { bridge.orgAddNote(body, MarkdownText.tagString(body)) }
+    fun orgAddNote(body: String) {
+        val known = view?.org?.notes?.mapTo(HashSet()) { it.id } ?: emptySet()
+        viewModelScope.launch {
+            val reply = withContext(bridgeDispatcher) {
+                runCatching { bridge.orgAddNote(body, MarkdownText.tagString(body)) }
+            }
+            reply
+                .onSuccess { result ->
+                    apply(result)
+                    if (result is Reply.Updated) {
+                        result.view.org.notes.firstOrNull { it.id !in known }?.let { fresh ->
+                            orgNoteLit = fresh.id
+                            orgScrollToNote = fresh.id
+                        }
+                    }
+                }
+                .onFailure { error = it.message ?: it.toString() }
+        }
+    }
 
     /**
      * ➤ in reply mode: a note whose `ref` is the note it answers. One command, so
@@ -736,6 +879,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     fun orgDeleteNote(note: Long) {
         orgNoteMenu = null
         if (orgNoteSel == note) orgNoteSel = -1
+        if (orgNoteLit == note) orgNoteLit = -1
         deferDelete(setOf(note), isTask = false)
     }
 
@@ -755,6 +899,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         val row = view?.org?.notes?.firstOrNull { it.id == note } ?: return
         orgNoteMenu = null
         if (orgNoteSel == note) orgNoteSel = -1
+        if (orgNoteLit == note) orgNoteLit = -1
         val title = OrgModel.taskTitle(row)
         val body = row.body
         val known = view?.org?.tasks?.mapTo(HashSet()) { it.id } ?: emptySet()
@@ -782,7 +927,14 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun orgTaskNotes(task: Long, notes: String) = act { bridge.orgTaskNotes(task, notes) }
 
-    fun orgToggleTaskDone(task: Long, done: Boolean) = act { bridge.orgTaskDone(task, done) }
+    /**
+     * Tick a task. The write lands at once — the row has to move for the tap to
+     * feel like anything — and the bar offers to put it back (ADR-0033).
+     */
+    fun orgToggleTaskDone(task: Long, done: Boolean) {
+        act { bridge.orgTaskDone(task, done) }
+        offerChange(setOf(task), done)
+    }
 
     fun orgTaskPriority(task: Long, slot: Int) = act { bridge.orgTaskPriority(task, slot) }
 
@@ -833,11 +985,6 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         act { bridge.orgDeleteList(list) }
     }
 
-    /** The area's own stack. A step here can never reach a page's edits. */
-    fun orgUndo() = act { bridge.orgUndo() }
-
-    fun orgRedo() = act { bridge.orgRedo() }
-
     /**
      * 指令 (SPEC §四十一): one batch of AI instructions, pasted as
      * `{"operations":[…]}` and applied by the Rust side **in order** and as **one**
@@ -854,12 +1001,31 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── LAN sync ───────────────────────────────────────────────────────────
     //
-    // The page's verbs, each one a whole-view reply. `openSync` doubles as the
-    // switch that puts this device on the LAN — the session starts the engine the
-    // first time it is asked — and the ordinary one-second tick is what keeps a
-    // cycle moving, so nothing here needs a timer.
+    // Sync is on when the app opens, not when a page is visited (ADR-0032), so
+    // the engine starts at launch and the transport is pushed to the session as
+    // it changes. The verbs below are the 同步 page's own, each one a whole-view
+    // reply; the ordinary one-second tick is what keeps a cycle moving, so
+    // nothing here needs a timer.
 
     fun openSync() = act { bridge.syncState() }
+
+    /**
+     * Start the engine and say which transport this device is on.
+     *
+     * Called once the library is open, and again on every transport change. The
+     * transport half is what makes the phone's aggressive cadence conditional on
+     * Wi-Fi rather than unconditional; sending it together with the start means
+     * the very first round is already at the right cadence rather than one
+     * relaxed window late.
+     *
+     * `kick` is only meaningful on a *change* to Wi-Fi — arriving on Wi-Fi
+     * should round immediately rather than finish out a 60-second window — and
+     * the caller knows which of the two this is.
+     */
+    fun syncStart(kick: Boolean = false) = act {
+        bridge.syncTransport(Network.isOnWifi(getApplication()), kick)
+        bridge.syncOpen()
+    }
 
     fun syncSetAuto(on: Boolean) = act { bridge.syncSetAuto(on) }
 
@@ -872,10 +1038,10 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     fun syncNow(id: String) = act { bridge.syncNow(id) }
 
     /**
-     * The 刷新 in 笔记 and 任务: one round with every paired device.
+     * The pull-to-refresh in 笔记 and 任务: one round with every paired device.
      *
-     * [refresh] rather than [syncNow] is the *intent* here — the user pressed a
-     * button that says "my note is not here, go get it", and which of the two
+     * [refresh] rather than [syncNow] is the *intent* here — the user pulled a
+     * list that says "my note is not here, go get it", and which of the two
      * peers happened to have it is not a question they asked. A per-peer
      * `syncNow` would put that choice back on them at the moment they least
      * want it.
@@ -884,14 +1050,20 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun syncForget(id: String) = act { bridge.syncForget(id) }
 
-    // ─── the deferred delete ────────────────────────────────────────────────
+    // ─── the floating 撤销 bar ──────────────────────────────────────────────
     //
-    // Delete is optimistic: the row is hidden at once and the real command waits
-    // out a 撤销 window (ADR-0015). It is owned *here* rather than by the screen
-    // that asked, which is what lets the bar survive leaving the page — the
-    // reference app keeps its pending delete the same way. `token` is what makes
-    // the three-second timer safe: an undo, or a second delete that replaced the
-    // first, leaves the old timer firing against a token that no longer matches.
+    // Two shapes reach the bar. A **delete** is optimistic: the row is hidden at
+    // once and the real command waits out a window (ADR-0015), so its 撤销 drops a
+    // write that never happened. A **change already written** — ticking a task —
+    // has nothing to wait for, because the row has already moved, so its 撤销 is
+    // the inverse write. Both are owned *here* rather than by the screen that
+    // asked, which is what lets the bar survive leaving the page — the reference
+    // app keeps its pending delete the same way.
+    //
+    // One `token` counter serves both: it makes a timer safe (an undo, or a newer
+    // action that replaced the bar, leaves the old timer firing against a token
+    // that no longer matches), and it says which offer is the newest — which
+    // matters because one host draws one bar.
 
     /** A delete that has been hidden but not yet sent. */
     data class PendingDelete(
@@ -904,7 +1076,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     var pendingDelete by mutableStateOf<PendingDelete?>(null)
         private set
 
-    private var deleteToken = 0L
+    private var undoToken = 0L
 
     /**
      * Hide the rows and start the window. A second delete commits the first.
@@ -915,7 +1087,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun deferDelete(ids: Set<Long>, isTask: Boolean, message: String? = null) {
         pendingDelete?.let { commitPendingDelete(it.token) }
-        val token = ++deleteToken
+        val token = ++undoToken
         pendingDelete = PendingDelete(
             token = token,
             ids = ids,
@@ -941,6 +1113,62 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         for (id in pending.ids) {
             if (pending.isTask) act { bridge.orgDeleteTask(id) } else act { bridge.orgDeleteNote(id) }
         }
+    }
+
+    /** A change that has been written, with the state its rows came from. */
+    data class PendingChange(
+        val token: Long,
+        val ids: Set<Long>,
+        val done: Boolean,
+        val message: String,
+    )
+
+    var pendingChange by mutableStateOf<PendingChange?>(null)
+        private set
+
+    /** What the bar shows, and what its 撤销 does, for whichever offer is newest. */
+    data class UndoBar(val token: Long, val message: String, val undo: () -> Unit)
+
+    /**
+     * The newest of the two windows. Read rather than stored: the two kinds are
+     * independent states, and the bar is the one question over them — *what did
+     * you just do, and how do you put it back*.
+     */
+    val undoBar: UndoBar?
+        get() = listOfNotNull(
+            pendingDelete?.let { UndoBar(it.token, it.message, ::undoPendingDelete) },
+            pendingChange?.let { UndoBar(it.token, it.message, ::undoPendingChange) },
+        ).maxByOrNull { it.token }
+
+    /**
+     * Offer the bar for a tick. `done` is the state the rows were written *to*, so
+     * 撤销 writes the one they came from.
+     *
+     * The window is longer than a delete's on purpose: a delete's is a deadline —
+     * after it the row is really gone — while nothing here waits, so the bar can
+     * stay up as long as a finger needs to read it and reach the word in it.
+     */
+    private fun offerChange(ids: Set<Long>, done: Boolean) {
+        if (ids.isEmpty()) return
+        val token = ++undoToken
+        val message = when {
+            ids.size > 1 && done -> "已完成 ${ids.size} 项"
+            ids.size > 1 -> "已标记为未完成 ${ids.size} 项"
+            done -> "任务已完成"
+            else -> "已标记为未完成"
+        }
+        pendingChange = PendingChange(token = token, ids = ids, done = done, message = message)
+        viewModelScope.launch {
+            delay(CHANGE_UNDO_MS)
+            if (pendingChange?.token == token) pendingChange = null
+        }
+    }
+
+    /** The bar's 撤销 on a written change: every row goes back to where it was ticked from. */
+    fun undoPendingChange() {
+        val pending = pendingChange ?: return
+        pendingChange = null
+        for (id in pending.ids) act { bridge.orgTaskDone(id, !pending.done) }
     }
 
     // ─── the plumbing ───────────────────────────────────────────────────────
@@ -1028,6 +1256,11 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
      * SQLite write on the way out of the app.
      */
     override fun onCleared() {
+        // Unwatch the network before anything else: the callback holds a
+        // `ConnectivityManager` registration for the life of the process, and
+        // this is the last point at which we are still in a position to drop it.
+        stopWatchingNetwork?.invoke()
+        stopWatchingNetwork = null
         if (!closed) {
             closed = true
             runBlocking(bridgeDispatcher) {
@@ -1042,6 +1275,9 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
         /** How long a deleted row stays recoverable before the real command goes out. */
         const val DELETE_UNDO_MS = 3_000L
+
+        /** How long a ticked task's bar stays up. Nothing commits when it ends. */
+        const val CHANGE_UNDO_MS = 5_000L
     }
 }
 

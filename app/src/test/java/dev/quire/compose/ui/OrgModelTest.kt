@@ -291,6 +291,26 @@ class OrgModelTest {
     }
 
     @Test
+    fun a_tap_lights_its_row_and_the_open_note_lights_nobody() {
+        // ADR-0031: the lit row and the open note are two values. The list marks
+        // `selected` off the lit one alone — pointing at a card says which row is
+        // in hand while the page stays closed — and a note the *page* is open for
+        // never lights a row by being open, because being on screen is how it
+        // already says so.
+        val catalog = OrgCatalog.Empty.copy(notes = listOf(note(1), note(2)))
+        val lit = OrgModel.notes(catalog, "", "", 0, selected = 2)
+        assertTrue(lit.first { it.id == 2L }.selected)
+        assertFalse(lit.first { it.id == 1L }.selected)
+        assertTrue(OrgModel.notes(catalog, "", "", 0, selected = -1).none { it.selected })
+
+        // 回收站 is the same list turned over, and pointing at a binned row is the
+        // same question — so the bin's rows light off the same value.
+        val binned = OrgCatalog.Empty.copy(notes = listOf(note(1).copy(deletedAt = 100)))
+        assertTrue(OrgModel.binNotes(binned, "", selected = 1)[0].selected)
+        assertFalse(OrgModel.binNotes(binned, "", selected = -1)[0].selected)
+    }
+
+    @Test
     fun a_reply_is_a_note_carrying_a_ref_and_the_parent_lists_it() {
         // A comment is an ordinary note with a ref, so the comments list is a
         // filter of the one catalog — there is no second store to disagree with.

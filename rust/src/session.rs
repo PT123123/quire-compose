@@ -18,6 +18,7 @@
 //! * **`History` is per page.** A Ctrl+Z in one document must not reach
 //!   another's edits, so every command and every undo names its page.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -354,6 +355,23 @@ pub enum Request {
     /// The 同步 page's state, and the request that starts the engine: opening the
     /// page is what puts this device on the LAN, so nothing listens before it.
     SyncState,
+    /// Whether the device is on Wi-Fi — the shell's answer, not a question for
+    /// the bridge (ADR-0032).
+    ///
+    /// The cadence depends on it and the engine's announcement does not care,
+    /// so this is a fact to be told rather than a verb. `Kick` rides along: the
+    /// first `true` that arrives after a round has already run at the relaxed
+    /// cadence should not wait out the remainder of a 60-second window before
+    /// the first aggressive one.
+    SyncTransport {
+        wifi: bool,
+        kick: bool,
+    },
+    /// Start the engine. Sent at launch, so this device is on the LAN from the
+    /// moment the app opens rather than after a visit to the 同步 page
+    /// (ADR-0032). Idempotent, and cheap — the work is in the engine's threads,
+    /// not in this call.
+    SyncOpen,
     SyncSetAuto {
         on: bool,
     },
@@ -432,6 +450,25 @@ pub struct Session {
     /// then, so a session that never opens that page spawns no threads and
     /// listens on no port (`crate::sync`).
     pub(crate) sync: Option<crate::sync::Sync>,
+    /// Whether the device is on Wi-Fi, told by the shell (ADR-0032).
+    ///
+    /// A fact only the platform can answer: `ConnectivityManager` lives on the
+    /// Kotlin side, and there is no Rust-side way to ask which transport the
+    /// default route uses. `Session` holds it rather than deciding from it, so
+    /// the policy — what the timer does when the answer is true — stays in
+    /// `crate::sync` next to the interval it changes. `false` until told: a
+    /// library that has not been told its transport yet is not going to be
+    /// dialled every ten seconds on the strength of an absence of evidence.
+    pub(crate) on_wifi: bool,
+    /// The instant a *content* write last landed — a block, an organizer row, an
+    /// undo step — as unix seconds, `0` when nothing is pending.
+    ///
+    /// The auto-sync timer reads it: a fresh write is worth pushing inside a
+    /// couple of seconds rather than letting it sit out the rest of the window.
+    /// Navigation side effects (`mark_opened`, `persist_expanded`) deliberately
+    /// do not touch it — a recents entry is not a change a peer merges. `Cell`
+    /// because `record` takes `&self`.
+    pub(crate) dirty_at: Cell<u64>,
 }
 
 impl Session {
@@ -509,6 +546,9 @@ impl Session {
             // Not started here: the engine spawns four threads and binds a port,
             // and an app that never opens the 同步 page should do neither.
             sync: None,
+            // Answered by the first `syncTransport` request; see the field.
+            on_wifi: false,
+            dirty_at: Cell::new(0),
         };
         // The organizer stamps every write with this device's id (the row's
         // revision), so it has to know it — read once here and kept for the
@@ -821,11 +861,34 @@ impl Session {
             // ─── LAN sync ───────────────────────────────────────────────────
             //
             // `SyncState` is the page being opened, and it is what starts the
-            // engine — so a session that never shows that page never listens.
+            // engine. So does `SyncNow`/`SyncNowAll`, and — since ADR-0032 — so
+            // does `SyncOpen`, which the shell sends at launch: sync is on when
+            // the app opens, not after a visit to a page.
             Request::SyncState => {
                 self.sync_ensure()?;
                 self.sync_pump();
                 Ok(Outcome::Full)
+            }
+            Request::SyncOpen => {
+                // Idempotent, and deliberately answered `Quiet`: it changes no
+                // row and no peer, only which threads exist. The engine's first
+                // `Discovered` jobs will produce real updates a tick later.
+                self.sync_ensure()?;
+                Ok(Outcome::Quiet)
+            }
+            Request::SyncTransport { wifi, kick } => {
+                self.on_wifi = wifi;
+                // `kick` is the caller's "round now" — both the transport *change*
+                // (Network.observe guards its own duplicates) and the shell's
+                // return-to-foreground catch-up, where the answer may already be
+                // `true` and still deserve a round. The timer's own window decides
+                // nothing here: the caller asked for this one.
+                if kick && wifi {
+                    if let Some(s) = self.sync.as_mut() {
+                        s.round_now();
+                    }
+                }
+                Ok(Outcome::Quiet)
             }
             Request::SyncSetAuto { on } => {
                 self.sync_set_auto(on)?;
@@ -869,7 +932,15 @@ impl Session {
     ) -> Result<Outcome, String> {
         let changes = op(&mut self.org, &mut self.doc, &mut self.hist)?;
         self.record(changes);
+        self.touch_dirty();
         Ok(Outcome::Full)
+    }
+
+    /// Stamp [Session::dirty_at]: a content write just landed, and the auto-sync
+    /// timer is entitled to push it ahead of its window.
+    fn touch_dirty(&self) {
+        self.dirty_at
+            .set(quire_core::services::sync::engine::now_unix());
     }
 
     /// Undo or redo inside the area — always [`ORGANIZER_STACK`], never the open
@@ -881,7 +952,10 @@ impl Session {
             self.org.redo(&mut self.doc, &mut self.hist)
         };
         match changes {
-            Some(changes) => self.record(changes),
+            Some(changes) => {
+                self.record(changes);
+                self.touch_dirty();
+            }
             // Nothing left in that direction: the step must not be remembered as
             // having happened, or the button stays lit over an empty stack.
             None => self.org.set_exhausted(undo),
@@ -915,6 +989,7 @@ impl Session {
         }
         if let Some(changes) = command::exec(&mut self.doc, &mut self.hist, page, cmd) {
             self.persistence.record(changes);
+            self.touch_dirty();
             self.can_undo = true;
             self.can_redo = false;
         }
@@ -934,6 +1009,7 @@ impl Session {
         match changes {
             Some(changes) => {
                 self.persistence.record(changes);
+                self.touch_dirty();
                 self.can_undo = true;
                 self.can_redo = true;
             }
@@ -1025,6 +1101,7 @@ impl Session {
         });
         self.active = Some(id);
         self.mark_opened(id);
+        self.touch_dirty();
         Ok(Outcome::Full)
     }
 
@@ -1037,6 +1114,7 @@ impl Session {
         let title = if title.trim().is_empty() { UNTITLED.to_string() } else { title };
         self.ws.set_title(page, &title);
         self.apply_now(vec![Change::PageTitleSet { id: page, title }])?;
+        self.touch_dirty();
         Ok(Outcome::Full)
     }
 
@@ -1056,6 +1134,7 @@ impl Session {
             self.active = self.ws.first_root();
         }
         self.save_recents();
+        self.touch_dirty();
         Ok(Outcome::Full)
     }
 
@@ -1065,6 +1144,9 @@ impl Session {
         // Persisted view state, not content: queued, not flushed (the desktop
         // reads it the same way, and a star is not worth a disk sync).
         self.record(vec![Change::PageFavoriteSet { id: page, favorite: value }]);
+        // A star *is* content a peer merges (it rides on the page row), even
+        // though it is not worth a disk sync.
+        self.touch_dirty();
         Ok(Outcome::Full)
     }
 

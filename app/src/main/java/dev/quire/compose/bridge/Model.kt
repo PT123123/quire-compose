@@ -214,6 +214,14 @@ data class SyncState(
     val selfAddress: String,
     val auto: Boolean,
     val interval: Long,
+    /**
+     * What the timer is actually running at, which on Wi-Fi is not the same as
+     * [interval] (ADR-0032). Drawn beside the chips, because a chip reading
+     * 「30 分」 over a timer firing every 10 秒 is the page being half right.
+     */
+    val effectiveInterval: Long,
+    /** Whether the shell has said this device is on Wi-Fi. */
+    val onWifi: Boolean,
     val port: Int,
     val discoveryPort: Int,
     val busy: Boolean,
@@ -241,6 +249,8 @@ data class SyncState(
             selfAddress = "",
             auto = true,
             interval = 60,
+            effectiveInterval = 60,
+            onWifi = false,
             port = 5878,
             discoveryPort = 5879,
             busy = false,
@@ -402,6 +412,10 @@ private fun parseSync(json: JSONObject) = SyncState(
     selfAddress = json.optString("selfAddress"),
     auto = json.optBoolean("auto", true),
     interval = json.optLong("interval", 60),
+    // No field on the wire (a build before ADR-0032) means no Wi-Fi known, so
+    // the effective cadence is the stored one rather than an invented 10 秒.
+    effectiveInterval = json.optLong("effectiveInterval", json.optLong("interval", 60)),
+    onWifi = json.optBoolean("onWifi"),
     port = json.optInt("port", 5878),
     discoveryPort = json.optInt("discoveryPort", 5879),
     busy = json.optBoolean("busy"),

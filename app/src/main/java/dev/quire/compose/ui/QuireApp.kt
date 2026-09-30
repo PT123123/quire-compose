@@ -61,7 +61,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun QuireApp(vm: QuireViewModel) {
     QuireTheme(theme = vm.view?.theme ?: "system") {
-        val colors = LocalQuireColors.current
         val palette = LocalThemePalette.current
         // The window is painted on the theme's own ramp (`Colors.page` on the
         // desktop). The Scaffold and the page bodies stay transparent so the
@@ -149,18 +148,20 @@ private fun Shell(view: View, vm: QuireViewModel) {
     LaunchedEffect(Unit) { vm.openNotes() }
 
     // The back gesture, in the order a touch user expects: close the capture
-    // overlay, leave 多选, leave the open row's form, then leave the destination —
-    // and both 任务 and the document go **home** to 收件箱 rather than out of the
-    // app. Only 收件箱 itself hands the gesture to the system, which is what makes
-    // it the bottom of the stack.
+    // overlay, leave 多选, leave the open note's page or the open row's form, then
+    // leave the destination — and both 任务 and the document go **home** to 收件箱
+    // rather than out of the app. Only 收件箱 itself hands the gesture to the
+    // system, which is what makes it the bottom of the stack.
     BackHandler(
         enabled = area != Area.Notes ||
+            vm.orgNoteSel >= 0 ||
             vm.orgCompose != QuireViewModel.Compose.Closed ||
             vm.orgSelecting,
     ) {
         when {
             vm.orgCompose != QuireViewModel.Compose.Closed -> vm.orgCloseComposer()
             vm.orgSelecting -> vm.orgStopSelecting()
+            area == Area.Notes && vm.orgNoteSel >= 0 -> vm.orgCloseNote()
             area == Area.Tasks && organizerInDetail(vm) -> vm.orgSelectRow(-1)
             area == Area.Tasks -> area = Area.Notes
             area == Area.Pages -> area = Area.Notes
@@ -191,6 +192,14 @@ private fun Shell(view: View, vm: QuireViewModel) {
                 Sidebar(
                     view = view,
                     vm = vm,
+                    // The drawer lights the row the shell is standing on — the
+                    // three destinations and, for the document, none of them.
+                    activeDestination = when (area) {
+                        Area.Notes -> DEST_NOTES
+                        Area.Tasks -> DEST_TASKS
+                        Area.Sync -> DEST_SYNC
+                        Area.Pages -> DEST_PAGES
+                    },
                     onPageMenu = { pageMenuFor = it },
                     // 收件箱 is home, so the page tree is the way *into* the
                     // document: opening a row closes the drawer and switches the
@@ -244,7 +253,6 @@ private fun Shell(view: View, vm: QuireViewModel) {
                     Area.Sync -> SyncBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
                     Area.Pages -> TopBar(
                         view = view,
-                        vm = vm,
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                     )
                 }
@@ -271,22 +279,24 @@ private fun Shell(view: View, vm: QuireViewModel) {
         CaptureOverlay(vm = vm, onDismiss = vm::orgCloseComposer)
     }
 
-    // The delete's 撤销 bar. One bar, shown while a deferred delete is pending and
-    // dropped the instant it commits or is undone. `Indefinite` on purpose: the
-    // three seconds are the view model's, and two clocks would disagree about the
-    // same delete.
-    val pendingDelete = vm.pendingDelete
-    LaunchedEffect(pendingDelete?.token) {
-        if (pendingDelete == null) return@LaunchedEffect
+    // The 撤销 bar. One host draws one bar, so the newest action owns it: a delete
+    // still waiting out its window (nothing has been sent yet) or a tick that is
+    // already written and is offered back — [QuireViewModel.undoBar] picks between
+    // them (ADR-0033). `Indefinite` on purpose: every window here is the view
+    // model's, and two clocks would disagree about the same row.
+    val bar = vm.undoBar
+    LaunchedEffect(bar?.token) {
+        if (bar == null) {
+            // The last window closed, or its 撤销 was tapped: take the bar down.
+            snackbarHostState.currentSnackbarData?.dismiss()
+            return@LaunchedEffect
+        }
         val result = snackbarHostState.showSnackbar(
-            message = pendingDelete.message,
+            message = bar.message,
             actionLabel = "撤销",
             duration = SnackbarDuration.Indefinite,
         )
-        if (result == SnackbarResult.ActionPerformed) vm.undoPendingDelete()
-    }
-    LaunchedEffect(pendingDelete) {
-        if (pendingDelete == null) snackbarHostState.currentSnackbarData?.dismiss()
+        if (result == SnackbarResult.ActionPerformed) bar.undo()
     }
 
     val menuBlock = blockMenuFor?.let { id -> view.blocks.firstOrNull { it.id == id } }
@@ -357,7 +367,7 @@ private fun Shell(view: View, vm: QuireViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TopBar(view: View, vm: QuireViewModel, onOpenDrawer: () -> Unit) {
+private fun TopBar(view: View, onOpenDrawer: () -> Unit) {
     val colors = LocalQuireColors.current
     TopAppBar(
         title = {
@@ -372,25 +382,6 @@ private fun TopBar(view: View, vm: QuireViewModel, onOpenDrawer: () -> Unit) {
         navigationIcon = {
             IconButton(onClick = onOpenDrawer) {
                 Icon(Icons.Default.Menu, contentDescription = "页面列表", tint = colors.textSecondary)
-            }
-        },
-        actions = {
-            // The two buttons are the only keyboard-free way to reach undo on a
-            // phone, and `canUndo` is the core's own answer rather than a local
-            // guess — see the note on the bridge's reply.
-            IconButton(onClick = vm::undo, enabled = view.canUndo) {
-                Icon(
-                    imageVector = IcUndo,
-                    contentDescription = "撤销",
-                    tint = if (view.canUndo) colors.textSecondary else colors.textMuted.copy(alpha = 0.35f),
-                )
-            }
-            IconButton(onClick = vm::redo, enabled = view.canRedo) {
-                Icon(
-                    imageVector = IcRedo,
-                    contentDescription = "重做",
-                    tint = if (view.canRedo) colors.textSecondary else colors.textMuted.copy(alpha = 0.35f),
-                )
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(

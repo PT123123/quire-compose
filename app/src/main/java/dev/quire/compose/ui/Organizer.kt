@@ -53,7 +53,6 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -240,15 +239,10 @@ fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
         // rather than the destination: "收件箱" over a list of deleted notes would
         // be the window lying about itself.
         title = if (vm.orgBin) "回收站" else "收件箱",
-        canUndo = vm.view?.orgCanUndo == true,
-        canRedo = vm.view?.orgCanRedo == true,
         onOpenDrawer = onOpenDrawer,
-        onUndo = vm::orgUndo,
-        onRedo = vm::orgRedo,
         onSearch = vm::toggleOrgSearch,
         onSort = { sortOpen = true },
         onMenu = { menuOpen = true },
-        extra = { OrgRefreshAction(vm) },
     )
     if (sortOpen) {
         OrgSortSheet(
@@ -330,15 +324,10 @@ fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
     OrgBar(
         // See [NotesBar]: the bin is the page turned over, and the title says so.
         title = if (vm.orgBin) "回收站" else "任务",
-        canUndo = vm.view?.orgCanUndo == true,
-        canRedo = vm.view?.orgCanRedo == true,
         onOpenDrawer = onOpenDrawer,
-        onUndo = vm::orgUndo,
-        onRedo = vm::orgRedo,
         onSearch = vm::toggleOrgSearch,
         onSort = { sortOpen = true },
         onMenu = { menuOpen = true },
-        extra = { OrgRefreshAction(vm) },
     )
     if (sortOpen) {
         OrgSortSheet(
@@ -361,64 +350,26 @@ fun TasksBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
 }
 
 /**
- * 刷新: a round with every paired device, right now.
+ * The furniture both bars share: nav, title, search, sort, overflow.
  *
- * It is on the bar rather than only on the 同步 page because that is where a
- * note is read *and* written — a row that arrived from another device while you
- * were looking at the list is the moment the button is worth pressing, and
- * making that a trip to another page is how a stale list stays stale.
- *
- * It is `vm.syncNowAll` and not `vm.syncNow(somePeer)` because there is no one
- * peer the user has in mind: the press means "a note of mine is not here", and
- * which of the devices has it is the question they did not ask. The desktop's
- * 刷新 is the same round against the same rule.
- *
- * Drawn only with a device to dial ([SyncState.devices] is every device heard,
- * this one excluded) — a button whose only possible answer is "没听到别的设备"
- * is a button in the way, and this one is in the organizer rather than on the
- * 同步 page. A round in flight turns the glyph into a spinner: the same
- * treatment the 同步 page's own bar gives, so "it is working" looks the same in
- * both places.
+ * No 撤销 and no 重做 here (ADR-0033). They were the only keyboard-free way to
+ * walk an organizer edit back, and they took two of the five slots above a title
+ * that had to be given a minimum width to survive them — but every write the
+ * floating bar can answer for (删除, 转为待办, 完成) already answers there, and a
+ * bar that undoes the whole last step is a different promise from the one a
+ * toolbar button makes. The document's own bar keeps its pair: there the typing
+ * is the whole page, and this shell has no keyboard on it.
  */
-@Composable
-private fun OrgRefreshAction(vm: QuireViewModel) {
-    val colors = LocalQuireColors.current
-    val sync = vm.view?.sync ?: SyncState.Empty
-    if (sync.devices.isEmpty()) return
-    IconButton(onClick = vm::syncNowAll, enabled = !sync.busy) {
-        if (sync.busy) {
-            CircularProgressIndicator(
-                color = colors.accent,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(18.dp),
-            )
-        } else {
-            Icon(
-                Icons.Default.Refresh,
-                contentDescription = "刷新并立即同步",
-                tint = colors.textSecondary,
-            )
-        }
-    }
-}
-
-/** The furniture both bars share: nav, title, search, sort, undo/redo, overflow. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OrgBar(
     title: String,
-    canUndo: Boolean,
-    canRedo: Boolean,
     onOpenDrawer: () -> Unit,
-    onUndo: () -> Unit,
-    onRedo: () -> Unit,
     onSearch: () -> Unit,
     onSort: () -> Unit,
     onMenu: () -> Unit,
-    extra: (@Composable () -> Unit)? = null,
 ) {
     val colors = LocalQuireColors.current
-    val dim = colors.textMuted.copy(alpha = 0.35f)
     TopAppBar(
         title = {
             Text(
@@ -426,9 +377,6 @@ private fun OrgBar(
                 style = QuireType.ui.copy(fontSize = 18.sp, fontWeight = FontWeight.SemiBold),
                 color = colors.textPrimary,
                 maxLines = 1,
-                // A floor, because five action buttons leave the title slot very
-                // little on a 360 dp screen and a squeezed title reads as "任".
-                modifier = Modifier.widthIn(min = 56.dp),
             )
         },
         navigationIcon = {
@@ -437,18 +385,11 @@ private fun OrgBar(
             }
         },
         actions = {
-            extra?.invoke()
             IconButton(onClick = onSearch) {
                 Icon(Icons.Default.Search, contentDescription = "搜索", tint = colors.textSecondary)
             }
             IconButton(onClick = onSort) {
                 Icon(IcSort, contentDescription = "排序", tint = colors.textSecondary)
-            }
-            IconButton(onClick = onUndo, enabled = canUndo) {
-                Icon(IcUndo, contentDescription = "撤销", tint = if (canUndo) colors.textSecondary else dim)
-            }
-            IconButton(onClick = onRedo, enabled = canRedo) {
-                Icon(IcRedo, contentDescription = "重做", tint = if (canRedo) colors.textSecondary else dim)
             }
             IconButton(onClick = onMenu) {
                 Icon(Icons.Default.MoreVert, contentDescription = "更多", tint = colors.textSecondary)
@@ -539,7 +480,7 @@ fun NotesPage(vm: QuireViewModel) {
                 NoteDetailPage(row = note, catalog = catalog, vm = vm)
             } else {
                 // The row is gone — deleted here, or undone away: leave the page.
-                LaunchedEffect(Unit) { vm.orgSelectNote(-1) }
+                LaunchedEffect(Unit) { vm.orgCloseNote() }
             }
         }
         return
@@ -548,16 +489,20 @@ fun NotesPage(vm: QuireViewModel) {
     // A delete in its 撤销 window is hidden on the frame it is made. The row is
     // still in the catalog — the command has not been sent — so the projection is
     // filtered, which is what makes the vanish instant and the undo free.
+    //
+    // The lit row rides in as `selected` (ADR-0031): a tap lights its card and
+    // stops there, and the note the *page* is open for is a different value that
+    // no list row reads — an open note identifies itself by being on screen.
     val hidden = vm.pendingDelete?.takeIf { !it.isTask }?.ids ?: emptySet()
-    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgExcluded, vm.orgNoteSort, hidden, vm.orgBin) {
+    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgExcluded, vm.orgNoteSort, hidden, vm.orgBin, vm.orgNoteLit) {
         if (vm.orgBin) {
             // 回收站 (core ADR-0003): the other half of the same catalog. The
             // search box applies to it and the tag row does not — the tag row's
             // counts are the live notes', so a filter over them would narrow by a
             // number drawn from somewhere else.
-            OrgModel.binNotes(catalog, vm.orgQuery)
+            OrgModel.binNotes(catalog, vm.orgQuery, vm.orgNoteLit)
         } else {
-            OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, selected = -1, exclude = vm.orgExcluded)
+            OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, selected = vm.orgNoteLit, exclude = vm.orgExcluded)
                 .filter { it.id !in hidden }
         }
     }
@@ -597,8 +542,18 @@ fun NotesPage(vm: QuireViewModel) {
             // above it are the page's furniture, and a refresh that dragged them
             // down with the cards would read as the whole page moving.
             val listState = rememberLazyListState()
+            // The note a send just made: scroll to it, and only if this list is
+            // showing it — a row a filter excludes has no place to scroll to,
+            // which is the filter's honest answer rather than a failed jump.
+            LaunchedEffect(vm.orgScrollToNote) {
+                val id = vm.orgScrollToNote
+                if (id < 0) return@LaunchedEffect
+                val index = rows.indexOfFirst { it.id == id }
+                if (index >= 0) listState.animateScrollToItem(index)
+                vm.consumeOrgScrollToNote()
+            }
             val sync = vm.view?.sync ?: SyncState.Empty
-            OrgPullRefresh(
+            QuirePullRefresh(
                 state = listState,
                 busy = sync.busy,
                 onRefresh = vm::syncNowAll,
@@ -612,7 +567,11 @@ fun NotesPage(vm: QuireViewModel) {
                     NoteCardView(
                         row = row,
                         preview = { id -> OrgModel.parentPreview(catalog, id) },
-                        onClick = { vm.orgSelectNote(row.id) },
+                        // A tap **lights the row and stops there** (ADR-0031): the
+                        // page replaced the list on every look before, and a list
+                        // of notes is for reading and choosing. 详情 / 详细信息 are
+                        // the ⋯ menu's two words, and the long press is 多选's.
+                        onClick = { vm.orgMarkNote(row.id) },
                         onParent = { parent ->
                             // The reference app clears its filter before jumping:
                             // a parent the current search hides must not jump to a
@@ -885,7 +844,7 @@ fun TasksPage(vm: QuireViewModel) {
                 // with a different meaning.
                 val listState = rememberLazyListState()
                 val sync = vm.view?.sync ?: SyncState.Empty
-                OrgPullRefresh(
+                QuirePullRefresh(
                     state = listState,
                     busy = sync.busy,
                     onRefresh = vm::syncNowAll,
@@ -1728,7 +1687,9 @@ private fun OrgTasksMenuSheet(vm: QuireViewModel, onDismiss: () -> Unit, onComma
 }
 
 /**
- * A note's ⋯: pin it, open it, reply to it, copy it, or delete it.
+ * A note's ⋯: pin it, open it, read its 详细信息, reply to it, copy it, or delete
+ * it. 详情 and 详细信息 are the page's two doors since a tap became only a
+ * highlight (ADR-0031) — the desktop's menu carries the same pair.
  *
  * 删除 no longer asks first: it hides the row at once and the 撤销 bar is the way
  * back (ADR-0015). That is the reference app's own idiom, costs one fewer tap on
@@ -1764,9 +1725,17 @@ private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: Q
                 vm.orgToggleNotePinned(row.id, !row.pinned)
                 onDismiss()
             }
-            OrgSheetItem("打开") {
+            OrgSheetItem("详情") {
                 onDismiss()
                 vm.orgSelectNote(row.id)
+            }
+            // The menu's second word (ADR-0031): the page arrives with 详细信息
+            // already up. The sheet used to be reachable only from the page's own
+            // ⋯ — below a long body, which is exactly where a question about the
+            // row's dates and id is least findable.
+            OrgSheetItem("详细信息") {
+                onDismiss()
+                vm.orgSelectNote(row.id, details = true)
             }
             OrgSheetItem("评论") {
                 onDismiss()
@@ -1777,6 +1746,15 @@ private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: Q
                 // unit 复制 hands an AI, and the name a 指令 batch can act on.
                 val catalog = vm.view?.org ?: OrgCatalog.Empty
                 clipboard.setText(AnnotatedString(OrgModel.noteCopyText(catalog, listOf(row.id))))
+                onDismiss()
+            }
+            OrgSheetItem("复制唯一 ID") {
+                // That line cut out: the name a 指令 batch and a sync round answer
+                // the row by, alone. The uuid is the catalog's, so the row the menu
+                // holds is looked back up for it — `local:<id>` when it has none.
+                val catalog = vm.view?.org ?: OrgCatalog.Empty
+                val stored = catalog.notes.firstOrNull { it.id == row.id }
+                clipboard.setText(AnnotatedString(OrgModel.uid(stored?.uuid ?: "", row.id)))
                 onDismiss()
             }
             // The reference app's own migration, and its no-confirm rule: the note
@@ -1827,7 +1805,7 @@ private fun OrgTaskMenuSheet(
                     vm.orgPurge(row.id)
                 }
             } else {
-            OrgSheetItem("打开详情") {
+            OrgSheetItem("详情") {
                 onDismiss()
                 vm.orgSelectTask(row.id)
             }
@@ -2665,17 +2643,17 @@ private fun OrgEmpty(text: String, hint: String) {
  *   drag the header off the screen, and the further you pull past the threshold the
  *   less it gives — the standard resistance curve, one line.
  * * **A refresh in flight cannot be pulled again.** `busy` comes from the sync
- *   state, so the indicator and the button in the bar are the same fact on two
- *   surfaces, and a second pull while a round is running does nothing rather than
- *   queueing a second one.
+ *   state, so the indicator here and the spinner in the 同步 bar are the same
+ *   fact on two surfaces, and a second pull while a round is running does
+ *   nothing rather than queueing a second one.
  *
  * `onRefresh` is a *request*, and this component does not wait for it: the view
  * answers with the round's progress through `busy`, so the spinner stays up for
- * as long as the round really is. That is the same contract the 刷新 button has.
+ * as long as the round really is.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun OrgPullRefresh(
+internal fun QuirePullRefresh(
     state: LazyListState,
     busy: Boolean,
     onRefresh: () -> Unit,

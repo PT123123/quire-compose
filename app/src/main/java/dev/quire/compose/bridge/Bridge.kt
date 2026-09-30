@@ -89,10 +89,6 @@ class Bridge(private val handle: Long) {
 
     fun outdentList(block: Long): Reply = send("outdentList", "block" to block)
 
-    fun undo(): Reply = send("undo")
-
-    fun redo(): Reply = send("redo")
-
     // ─── SPEC §四十一: notes and tasks ──────────────────────────────────────
     //
     // Every one of these answers with the whole view, because an organizer edit
@@ -237,9 +233,30 @@ class Bridge(private val handle: Long) {
 
     fun syncState(): Reply = send("syncState")
 
+    /**
+     * Start the engine, idempotently.
+     *
+     * Sent at launch, not only when the 同步 page is opened (ADR-0032): sync is
+     * on when the app opens, so a note written on the phone reaches the desktop
+     * without anyone visiting a settings page first. Quiet by design — it
+     * starts threads, it changes nothing to draw.
+     */
+    fun syncOpen(): Reply = send("syncOpen")
+
+    /**
+     * Tell the session which transport this device is on.
+     *
+     * The cadence follows from it: on Wi-Fi this shell runs the desktop's
+     * aggressive interval, off Wi-Fi the stored one. [kick] asks for a round
+     * right away when the answer just turned to `true`, so arriving on Wi-Fi
+     * does not then wait out the tail of a relaxed 60-second window.
+     */
+    fun syncTransport(wifi: Boolean, kick: Boolean = false): Reply =
+        send("syncTransport", "wifi" to wifi, "kick" to kick)
+
     fun syncSetAuto(on: Boolean): Reply = send("syncSetAuto", "on" to on)
 
-    /** Seconds, floored by the bridge at 15. */
+    /** Seconds, floored by the bridge at 10 — the same floor as the preset. */
     fun syncSetInterval(seconds: Long): Reply = send("syncSetInterval", "seconds" to seconds)
 
     fun syncSetName(name: String): Reply = send("syncSetName", "name" to name)
@@ -259,9 +276,10 @@ class Bridge(private val handle: Long) {
     fun syncNow(id: String): Reply = send("syncNow", "id" to id)
 
     /**
-     * A round with every paired device, right now — the 刷新 in 笔记 and 任务.
-     * No argument because there is no one peer being asked about, and the bridge
-     * starts the engine if this session has never opened the 同步 page.
+     * A round with every paired device, right now — the pull-to-refresh in
+     * 笔记 and 任务. No argument because there is no one peer being asked
+     * about, and the bridge starts the engine if this session has never opened
+     * the 同步 page.
      */
     fun syncNowAll(): Reply = send("syncNowAll")
 

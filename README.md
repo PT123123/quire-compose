@@ -123,7 +123,8 @@ either of the other two destinations rather than leaving the app.
   suggestions — with the caret asked for on the frame it appears, so the keyboard
   comes up with it. A note's `#tokens` become its tags, and one 撤销 puts the whole
   note away.
-- **A note opens on a page of its own**: its body, its tags, a 详细信息 sheet (id,
+- **A note opens on a page of its own** — the card's ⋯ calls it **详情**, and a tap on
+  the card only lights the row (ADR-0031): its body, its tags, a 详细信息 sheet (id,
   created, edited, tags, length, pinned, ref, comment count) and its replies.
   **评论 / 引用**: replying to a note writes a note carrying a reference to it — the
   card draws a `↩` preview of what it answers, the parent's page lists its comments,
@@ -147,8 +148,17 @@ either of the other two destinations rather than leaving the app.
   between lists — and the same move in the row's ⋯.
 - Lists: create, rename, recolour, delete (its tasks move to the inbox in one
   undoable step).
-- **Its own undo and redo.** The organizer has a stack of its own
-  (`core::ORGANIZER_STACK`), so a 撤销 in 收件箱 can never reach a page's edits.
+- **Its own undo stack, and no buttons for it.** The organizer has a stack of its own
+  (`core::ORGANIZER_STACK`), so a 撤销 in 收件箱 can never reach a page's edits — but
+  neither bar carries 撤销 / 重做 (ADR-0033): the two bars show 搜索, 排序 and ⋯, and
+  touch undo lives in the floating bar, which names the action it takes back. The
+  document's own bar keeps its pair, because there the typing is the whole page.
+- **A tick is undo-able too, and it is the other shape.** Ticking a task — the row,
+  the detail form, the ⋯, or 多选's 完成 — writes at once (the row has to move for the
+  tap to count) and offers a **撤销** bar that writes the inverse; a delete instead
+  waits out its window unsent, so its 撤销 drops a write that never happened. One bar
+  is drawn at a time and the newest action owns it, which is why both windows count
+  down from one token rather than two clocks.
 - **Twelve themes**, ActivityWatch's own catalog (`aw-qtui/src/theme.h`'s
   `kThemes[]`, the same twelve the desktop shell ports into `ui/Colors.slint`), so a
   theme picked here is the theme the desktop opens in — both read the same `theme`

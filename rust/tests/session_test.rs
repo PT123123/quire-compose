@@ -837,3 +837,118 @@ fn the_refresh_op_is_spelled_the_way_the_button_sends_it() {
     h.ok(r#"{"op":"syncState"}"#);
 }
 
+/// **The engine starts on `syncOpen`, so a session that never opens 同步 syncs
+/// anyway** (ADR-0032).
+///
+/// The behavior the user asked for by name — 「进入界面就打开同步」 — and the
+/// reason it is its own op rather than a side effect of `syncState`: the app
+/// sends it at launch, from a screen that has nothing to do with sync, and the
+/// 同步 page's own read would otherwise be the only thing that can start it.
+#[test]
+fn opening_the_app_is_what_starts_sync_not_visiting_the_page() {
+    let mut h = Harness::new("sync-open-at-launch");
+    // No syncState, no page: this is the shape the launch sequence has.
+    h.ok(r#"{"op":"syncOpen"}"#);
+    let view = h.ok(r#"{"op":"syncState"}"#);
+    assert_eq!(
+        view["sync"]["running"], Value::Bool(true),
+        "syncOpen alone must leave the engine running: {view}"
+    );
+    // Idempotent: a second launch sequence (the ViewModel is not recreated on a
+    // rotation, but a fresh process is) must not be a second engine.
+    h.ok(r#"{"op":"syncOpen"}"#);
+    h.ok(r#"{"op":"syncTransport","wifi":false,"kick":false}"#);
+    h.ok(r#"{"op":"syncOpen"}"#);
+    assert_eq!(
+        h.ok(r#"{"op":"syncState"}"#)["sync"]["running"],
+        Value::Bool(true)
+    );
+}
+
+/// **On Wi-Fi the timer runs at the desktop's aggressive cadence, whatever was
+/// chosen; off Wi-Fi the stored interval stands** (ADR-0032).
+///
+/// Two halves, because they are two decisions. The Wi-Fi half is the aggressive
+/// one — a stored 「30 分」 does not hold the timer back on a home LAN, because
+/// the whole claim of the setting is that Wi-Fi is the transport where a round is
+/// free. The off-Wi-Fi half is the *absence* of that: mobile data is the reason
+/// the policy is conditional, so with the transport unknown or cellular the
+/// stored value is exactly what runs, and no default is invented for it.
+#[test]
+fn the_cadence_follows_the_transport_not_the_chip() {
+    let mut h = Harness::new("sync-cadence");
+    // A deliberately slow choice: the case where the two numbers differ.
+    h.ok(r#"{"op":"syncSetInterval","seconds":1800}"#);
+
+    // Off Wi-Fi: what was chosen is what runs.
+    let view = h.ok(r#"{"op":"syncState"}"#);
+    assert_eq!(view["sync"]["interval"], Value::from(1800));
+    assert_eq!(view["sync"]["effectiveInterval"], Value::from(1800));
+    assert_eq!(view["sync"]["onWifi"], Value::Bool(false));
+
+    // On Wi-Fi: aggressive, and the page is told so rather than showing only the
+    // chip it drew.
+    h.ok(r#"{"op":"syncTransport","wifi":true,"kick":false}"#);
+    let view = h.ok(r#"{"op":"syncState"}"#);
+    assert_eq!(
+        view["sync"]["effectiveInterval"],
+        Value::from(10),
+        "Wi-Fi must dial at the aggressive end regardless of the stored value: {view}"
+    );
+    assert_eq!(
+        view["sync"]["interval"],
+        Value::from(1800),
+        "the stored choice is still the chip the user sees; only the timer moved"
+    );
+    assert_eq!(view["sync"]["onWifi"], Value::Bool(true));
+
+    // Back off Wi-Fi: relaxed again, with no memory of having been aggressive.
+    h.ok(r#"{"op":"syncTransport","wifi":false,"kick":false}"#);
+    assert_eq!(
+        h.ok(r#"{"op":"syncState"}"#)["sync"]["effectiveInterval"],
+        Value::from(1800)
+    );
+}
+
+/// **A stored interval faster than the aggressive floor still wins on Wi-Fi.**
+///
+/// The override is one-directional on purpose. It exists so a slow setting
+/// cannot hold back a LAN where syncing is free; it is not a claim that nobody
+/// may ever want a shorter wait, and a chip saying 「10 秒」 must not be quietly
+/// raised to 10.5 by a rule that thinks it owns the ceiling.
+#[test]
+fn a_faster_choice_than_the_floor_still_stands() {
+    let mut h = Harness::new("sync-cadence-faster");
+    h.ok(r#"{"op":"syncTransport","wifi":true,"kick":false}"#);
+    // 10 is the floor, and also the aggressive value, so this is the boundary:
+    // the floor must not raise it, and the Wi-Fi rule must not lower it.
+    h.ok(r#"{"op":"syncSetInterval","seconds":10}"#);
+    let view = h.ok(r#"{"op":"syncState"}"#);
+    assert_eq!(view["sync"]["interval"], Value::from(10));
+    assert_eq!(view["sync"]["effectiveInterval"], Value::from(10));
+}
+
+/// **The 10 秒 preset is no longer silently floored to 15.**
+///
+/// The page's own fastest chip said 10 秒 while `MIN_INTERVAL` was 15, so
+/// choosing it stored 15 and the chip lied about what it had done — the same
+/// class of defect as the desktop's second clamp at 15, which is why both are
+/// pinned by a test rather than left to agree by inspection.
+#[test]
+fn the_fastest_preset_is_the_number_it_says() {
+    let mut h = Harness::new("sync-preset-10");
+    h.ok(r#"{"op":"syncSetInterval","seconds":10}"#);
+    assert_eq!(
+        h.ok(r#"{"op":"syncState"}"#)["sync"]["interval"],
+        Value::from(10),
+        "choosing 10 秒 must store 10"
+    );
+    // And the floor still holds below it, or the aggressive timer is one click
+    // away from being a sub-second dial.
+    h.ok(r#"{"op":"syncSetInterval","seconds":1}"#);
+    assert_eq!(
+        h.ok(r#"{"op":"syncState"}"#)["sync"]["interval"],
+        Value::from(10)
+    );
+}
+

@@ -50,11 +50,20 @@ import dev.quire.compose.bridge.View
  * phone's main screen is a control that costs a row of every page to serve an
  * errand nobody runs twice a day. It is one row at the bottom of the drawer, in
  * the same place the desktop shell keeps it.
+ *
+ * [activeDestination] is where the shell is standing — [DEST_NOTES],
+ * [DEST_TASKS], [DEST_SYNC], or [DEST_PAGES] for the document and anything that
+ * is not one of the three. It is what lights the three action rows and what
+ * keeps the page tree lit only while the document is the thing on screen: a
+ * drawer that highlights 收件箱's row while the user reads a page is lying
+ * about where they are, and so is one that keeps a page row lit after they
+ * have left it.
  */
 @Composable
 fun Sidebar(
     view: View,
     vm: QuireViewModel,
+    activeDestination: Int,
     onPageMenu: (Long) -> Unit,
     /** Open a page in the document: close the drawer and show `Area.Pages`. */
     onOpenPage: (Long) -> Unit,
@@ -95,12 +104,23 @@ fun Sidebar(
             label = "收件箱",
             icon = Icons.Default.Edit,
             onClick = onOpenNotes,
+            selected = activeDestination == DEST_NOTES,
             // The drawer's first row takes the caret when it opens: that is how
             // the keyboard's focus — and the IME — leaves the page behind it.
             modifier = if (firstRowFocus != null) Modifier.focusRequester(firstRowFocus) else Modifier,
         )
-        SidebarAction(label = "任务", icon = Icons.Default.CheckCircle, onClick = onOpenTasks)
-        SidebarAction(label = "同步", icon = Icons.Default.Refresh, onClick = onOpenSync)
+        SidebarAction(
+            label = "任务",
+            icon = Icons.Default.CheckCircle,
+            onClick = onOpenTasks,
+            selected = activeDestination == DEST_TASKS,
+        )
+        SidebarAction(
+            label = "同步",
+            icon = Icons.Default.Refresh,
+            onClick = onOpenSync,
+            selected = activeDestination == DEST_SYNC,
+        )
         HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
         LazyColumn(modifier = Modifier.weight(1f)) {
@@ -117,7 +137,7 @@ fun Sidebar(
                 items(favorites.size, key = { "fav-${favorites[it].id}" }) { index ->
                     PageTreeRow(
                         page = favorites[index],
-                        selected = favorites[index].id == view.activePage,
+                        selected = activeDestination == DEST_PAGES && favorites[index].id == view.activePage,
                         onOpen = { onOpenPage(favorites[index].id) },
                         onToggleExpanded = { vm.toggleExpanded(favorites[index].id) },
                         onMenu = { onPageMenu(favorites[index].id) },
@@ -130,7 +150,7 @@ fun Sidebar(
                 val page = view.pages[index]
                 PageTreeRow(
                     page = page,
-                    selected = page.id == view.activePage,
+                    selected = activeDestination == DEST_PAGES && page.id == view.activePage,
                     onOpen = { onOpenPage(page.id) },
                     onToggleExpanded = { vm.toggleExpanded(page.id) },
                     onMenu = { onPageMenu(page.id) },
@@ -223,12 +243,14 @@ private fun PageTreeRow(
     }
 }
 
+/** One drawer row of the action kind — a destination, a new page, a recent. */
 @Composable
 private fun SidebarAction(
     label: String,
     icon: ImageVector = Icons.Default.Add,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    selected: Boolean = false,
 ) {
     val colors = LocalQuireColors.current
     Row(
@@ -236,14 +258,28 @@ private fun SidebarAction(
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 1.dp)
             .clip(RoundedCornerShape(Radius.sm))
+            // The lit row is the drawer's answer to "where am I" — the same
+            // surface the page tree lights, so one drawer speaks one dialect.
+            .background(if (selected) colors.surfaceSelected else colors.sidebar)
             .combinedClickableCompat(onClick)
             .padding(horizontal = 10.dp)
             .heightIn(min = 42.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(icon, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(18.dp))
-        Text(label, style = QuireType.ui, color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (selected) colors.textPrimary else colors.textMuted,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            label,
+            style = QuireType.ui.copy(fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal),
+            color = if (selected) colors.textPrimary else colors.textSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -276,3 +312,11 @@ private fun Modifier.combinedClickableCompat(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ): Modifier = this.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+
+/** The drawer's destinations, as [Sidebar]'s `activeDestination` spells them. */
+const val DEST_NOTES = 0
+const val DEST_TASKS = 1
+const val DEST_SYNC = 2
+
+/** The document — and anything that is not one of the three destinations above. */
+const val DEST_PAGES = -1

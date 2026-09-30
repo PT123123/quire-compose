@@ -202,7 +202,12 @@ private fun ParentPreviewRow(ref: Long, preview: (Long) -> String?, onOpen: (Lon
 @Composable
 fun NoteDetailPage(row: OrgModel.NoteRow, catalog: OrgCatalog, vm: QuireViewModel) {
     val colors = LocalQuireColors.current
-    var detailsOpen by remember { mutableStateOf(false) }
+    // 详细信息 rides in only on the arrival that asked for it: the menu's
+    // 详细信息 opens the page with the sheet up (ADR-0031), 详情 with it down,
+    // and every [QuireViewModel.orgSelectNote] writes the flag — so a jump to
+    // another row from this page cannot inherit the sheet the arrival before it
+    // asked for. From here on the ⋯ owns the sheet, as it always did.
+    var detailsOpen by remember(row.id) { mutableStateOf(vm.orgNoteDetailsOpen) }
     val comments = remember(catalog, row.id) { OrgModel.comments(catalog, row.id) }
     val preview: (Long) -> String? = { id -> OrgModel.parentPreview(catalog, id) }
 
@@ -215,7 +220,7 @@ fun NoteDetailPage(row: OrgModel.NoteRow, catalog: OrgCatalog, vm: QuireViewMode
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
-            IconButton(onClick = { vm.orgSelectNote(-1) }) {
+            IconButton(onClick = vm::orgCloseNote) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "返回",

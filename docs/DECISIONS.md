@@ -4,6 +4,236 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0033 · 顶栏不给撤销,浮条给；一勾也有一条浮条
+
+Three asks from a phone in the hand, and the fourth turned out to be already
+delivered — which is worth recording, because the gap between 已装 in the launcher
+and 已改 in the tree is what made them look like four.
+
+**The two organizer bars lose 撤销 and 重做.** `OrgBar` drew five action buttons
+over a title that had to be given a minimum width to survive them; it draws three.
+The pair was put there as the keyboard-free way to walk an organizer edit back,
+and it comes off because this shell already owns a better-shaped one — the
+floating bar, which says the action it is taking back. A grey arrow in a toolbar
+answers 「some last thing, maybe」; 「任务已完成 / 撤销」 answers the tap that was
+just made, which is the only question a user holding a phone is asking. The title's
+`widthIn(min = 56.dp)` floor goes with the buttons that required it.
+
+The document's bar (`Area.Pages`) keeps its pair, on purpose: there the typing *is*
+the page, so the toolbar is the only surface a walk-back can live on. 收件箱 and
+任务 are lists, and a list's verbs have a bar.
+
+**A tick gets that bar.** Completing a task — the row's checkbox, the detail page's,
+the ⋯ menu's, or 多选's 完成 — now offers 撤销 the way a delete does. The two are
+**not** the same mechanism, and the difference is why this is a decision rather
+than a line of code:
+
+- A **delete** is optimistic. Nothing is sent while the window runs, so 撤销 drops a
+  write that never happened, and the row is hidden by *filtering the projection*
+  (`pendingDelete.ids`) rather than by pretending.
+- A **tick** cannot be optimistic the same way. The row has to move for the tap to
+  feel like anything, and moving it before the write means the projection would
+  have to answer 「is this done」 from two truths at once. So the write lands and
+  撤销 writes the **inverse** — `orgTaskDone(id, !done)` for every row the bar
+  covered, which is why a batch's bar holds a set of ids rather than one.
+
+**One host, one bar, newest wins.** That is the second half of the decision, and it
+is why `deleteToken` became one shared `undoToken` counter: with a single
+monotonic source, "the offer the user is looking at" is decidable — the higher
+token. `QuireViewModel.undoBar` is read rather than stored, because the two windows
+stay independent states and the bar is the one question over them. A second effect
+that dismissed the bar when its own window closed would have dismissed *the other
+one's* bar too — one driver keyed on the winning token is what keeps a tick from
+silently eating a delete's window and dropping a row the user meant to keep.
+
+**The two windows are different lengths.** `DELETE_UNDO_MS` is 3 秒 and is a
+deadline: after it the row is really gone. `CHANGE_UNDO_MS` is 5 秒 and ends with
+nothing happening at all, so it is allowed to be the longer, finger-sized window —
+read a bar, aim at the word in it. Both bars are `Indefinite` and both timers are
+the view model's; two clocks disagreeing about the same row is the bug this whole
+section is shaped around.
+
+**The menu's door is called 详情.** 打开 became 详情 on a note's ⋯, and 打开详情
+became 详情 on a task's, so the two menus word the same door with the same
+character. 详细信息 is untouched and still means the metadata sheet — the two are
+deliberately not synonyms, and a user asking for 「详情」 got the page.
+
+**Context.** The build in the launcher is 0.6.6; ADR-0031's round is in the tree and
+not in it. Two of the four asks were that round's own work — a tap on a card lights
+the row and stops there, and the back gesture closes the note page instead of
+leaving the app (QuireApp's handler chain: capture overlay → 多选 → note page →
+task form → destination, with 收件箱 with nothing open still handing the gesture to
+the system). They are confirmed here rather than redone.
+
+**Consequences.**
+
+- **The stated price:** with the pair off both bars, a mistyped note body or a
+  moved 截止日期 on an Android phone without a keyboard cannot be walked back by
+  touch. The bar answers ticks and deletes; the core's per-area stack is now
+  unreachable from this shell's touch surface, and `Bridge.orgUndo` / `orgRedo`
+  stay only as the protocol's face. The document keeps its buttons, so the surface
+  where editing actually happens kept its pair.
+- The tick's bar does not stack: ticking A then B leaves the bar holding only B, so
+  A's tick goes back through 撤销 of nothing and stays put. That is what one bar
+  costs, and it matches what a delete's window already does.
+- `View.orgCanUndo` / `orgCanRedo` still ride the reply and are now read by nobody
+  in Kotlin. The Rust side keeps the stack and the flag for what the desktop reads.
+- **No test covers the bar.** It is a `LaunchedEffect` over `SnackbarHostState`, and
+  this shell's unit tests are pure projections (`OrgModelTest`, `MarkdownTextTest`)
+  with no Compose runtime on the assertions. The three things that would need a hand
+  on a device: the tick's bar appears and its 撤销 puts the row back; the batch bar
+  unticks every row it covered; a tick landing inside a delete's window replaces the
+  delete's bar without committing anything early.
+- 回收站's ⋯ still carries only 恢复 and 彻底删除, so a binned row cannot be read —
+  naming the door did not put it in the bin's menu. Out of this round's scope.
+
+## ADR-0032 · 打开应用就在同步，Wi-Fi 下是最激进的节奏
+
+The user asked for two things in one sentence, and they are two decisions: the
+desktop stays aggressive unconditionally, and this shell becomes aggressive
+**when it is on Wi-Fi** — with sync on from the moment the app opens, not after a
+visit to a settings page.
+
+**Sync starts at launch.** The engine used to start when the 同步 page was
+opened (`syncState`), so a phone that never visited that page was not on the LAN
+at all — 「我不需要我到同步设置中才开启同步」. A new `syncOpen` op starts the
+engine, and `QuireViewModel.init` sends it right after `bridge.open`. It is
+deliberately a *separate* op rather than a side effect of `syncState`: the launch
+sequence is not a page, and a start that rides on a page's read is a start that
+can only ever happen from that page. The page's own `openSync()` is now just a
+refresh plus a pump. The transport watcher is registered in the same coroutine
+rather than in `init` itself — a dispatch before `open` lands is answered
+「the library is not open」, which would surface as an error banner nobody can act
+on.
+
+**The cadence follows the transport.** `Network.isOnWifi` /
+`Network.observe` answer from `ConnectivityManager` (the one fact with no Rust
+side — hence `ACCESS_NETWORK_STATE`, a normal permission with no prompt), and
+the answer rides the bridge as `syncTransport`. On Wi-Fi the timer runs at
+`AGGRESSIVE_INTERVAL` = 10 秒, the desktop's own number, so on a home LAN the two
+shells are indistinguishable. Off Wi-Fi the stored interval stands and nothing is
+invented for it: mobile data is the reason the policy is conditional at all.
+
+Three decisions are inside that, and each one is a choice rather than a detail:
+
+- **The default route, not the radio.** "Is this phone on Wi-Fi" is asked as
+  whether the *default network* has `TRANSPORT_WIFI`, not whether a Wi-Fi
+  interface exists. A phone can hold a saved SSID while its default route is
+  cellular; asking about the interface would then dial the LAN over mobile data
+  every ten seconds, which is the exact outcome the whole mechanism prevents.
+  `NET_CAPABILITY_VALIDATED` is deliberately *not* required — a LAN with no
+  internet behind it is still a LAN, and both devices are on it.
+- **The override is one-directional.** On Wi-Fi, `min(chosen, 10)` — a stored
+  「30 分」 does not hold the timer back, because the setting cannot be right
+  about the transport. A chosen value *faster* than 10 still stands; the rule
+  owns the ceiling, not the floor. Each direction is pinned by a test.
+- **Arriving on Wi-Fi rounds at once** (`kick`). Otherwise connecting to Wi-Fi
+  would install the aggressive cadence and then make the user wait out the tail
+  of the relaxed window it had already started — the wait the aggressive cadence
+  exists to remove, still being made.
+
+**The 10 秒 preset stopped being a lie.** `MIN_INTERVAL` was 15 while the
+page's own fastest chip read 「10 秒」, so choosing it stored 15. The desktop had
+the same defect in the second of its two clamps (`on_sync_interval_set` still
+`.max(15)` against a store flooring at 10). Both are fixed, and both are pinned
+by a test rather than left to agree by inspection.
+
+**The page shows the number in force.** `effectiveInterval` and `onWifi` ride
+the view beside the stored `interval`, so a chip reading 「30 分」 over a
+10-second timer is not drawn as if it were the timer. The banner that promised
+「停留在本页面即会开启广播发现」 was the page describing the old rule and is now
+false.
+
+**Consequences.** This shell needs `ACCESS_NETWORK_STATE`, and it holds the
+`on_wifi` fact with the policy that consumes it in `crate::sync`
+(`sync_effective_interval`), not in Kotlin — the transport is data, the cadence is
+a decision. Backgrounding still stops the pump, so the aggressive cadence is a
+foreground claim; that is unchanged and still the honest limit. Off Wi-Fi the
+10 秒 preset is still selectable, still stores 10, and simply runs at 10 on a LAN
+if one turns out to be reachable — the conditionality is about not spending the
+battery, not about a hard block. Four tests pin this
+(`opening_the_app_is_what_starts_sync_not_visiting_the_page`,
+`the_cadence_follows_the_transport_not_the_chip`,
+`a_faster_choice_than_the_floor_still_stands`,
+`the_fastest_preset_is_the_number_it_says`).
+
+## ADR-0031 · 单击只选中, the menu's two words, and a settings sheet you can copy from
+
+The desktop's ADR-0135…0138 round, from this shell's side — the debt its PLAN
+named at the end ("compose 那一半是欠着的"). Three of the four decisions have a
+touch half; the fourth (单实例) is a property of a desktop window and has none.
+
+**A tap on a note card lights the row and stops there.** The note page is
+reached through the ⋯ menu, which gains the pair the desktop's carries: 打开,
+and 详细信息 — which now opens the page with the sheet already up. The open
+note and the lit row are **two values** in the view model (`orgNoteSel` /
+`orgNoteLit`), which is the whole mechanism: the list paints `selected` off the
+lit one, the page gates on the other, and no value a tap writes can raise a
+page. The desktop's reason travels whole — a click that raised the page over
+the list made the list something you leave five times to read once — and the
+touch form of "two asks are two words rather than one gesture that had to
+guess" is the card's always-drawn ⋯, the affordance a finger has instead of a
+right-click.
+
+**The highlight follows the question.** Opening a card's ⋯ moves the light to
+that card, because every verb in the sheet acts on the row it was opened for.
+← (and the back gesture, see below) puts the light down with the page: closing
+it is putting the selection down.
+
+**详细信息 becomes reachable from the list.** It used to live only under the
+page's own ⋯ — below a body that can be eight cards tall, which is exactly
+where a question about a row's dates and 编号 is least findable. The desktop
+worded it the same way. 复制唯一 ID joins the menu beside 复制内容: the name a
+指令 batch and a sync round answer the row by, cut out of the line 复制内容
+already carries.
+
+**The back gesture closes the note page.** It never did — on 收件箱 with a page
+open the gesture fell through to the system and left the app. That was a latent
+gap while a tap opened the page; with opening behind a menu it is the difference
+between a two-gesture round trip and losing the app, so the page joined the
+handler's chain (capture overlay → 多选 → note page → task form → destination).
+
+**The settings sheet's strings come off the glass.** The 关于 block is wrapped
+in a `SelectionContainer` — long-press selects, the system's copy bar does the
+rest — and gains the line it never had: **版本**, read from the package manager.
+The desktop's ADR-0135 is the same decision from its side, down to the reason:
+the strings a user is asked for about the app are exactly the ones a plain
+`Text` could not give. The headers stay chrome.
+
+**The tag column (ADR-0138's desktop half) was already here.** That ADR
+restored, from behind the desktop's own ADR-0118, the half a chip strip "could
+not hold": one level of the path, an explicit way out, a count per tag, 反向筛选
+per row. This shell never removed that half — M2.9 built it as the chips row and
+the 筛选条 (one level with subtree counts, ↑ 返回上级, ✕ clearing both halves,
+the hidden paths spelled out), and M2.95 added the ⊖. The column is the
+desktop's *form* of the same nav; a phone's width is where the strip is right.
+Nothing was owed here, and saying so is the record.
+
+Context: 桌面端这一轮的 ADR-0135…0138,其 PLAN 结尾点名 compose 那一半欠着.
+The task half is untouched, on both ends: a task row's tap is its open, and the
+desktop's ADR-0137 never said otherwise.
+
+Consequences:
+
+- 打开 stops being a synonym for the tap and becomes the *only* way in from the
+  list — two gestures where one was. That is the price the desktop already paid,
+  and the page is one ⋯ press away from the row being read.
+- Every `orgSelectNote` writes the 详细信息 flag, so a jump from an open page to
+  a comment or a parent cannot inherit the sheet the arrival before it asked
+  for.
+- The bin lights its rows off the same value — 回收站 is the same list turned
+  over, and pointing at a binned row is the same question.
+- The back chain grew one arm; 收件箱 with nothing open still hands the gesture
+  to the system, which is what keeps it the bottom of the stack.
+- `a_tap_lights_its_row_and_the_open_note_lights_nobody` pins the projection
+  half: the lit row is the only lit one, the open note lights nobody, and the
+  bin lights the same way.
+- **Named, because it is the round this one answers:** the desktop's own click
+  handler still writes the value the overlay's gate reads (`on_org_note_selected`
+  → `org_selected_note`, which `rebuild_organizer` fills `org-note-detail` from),
+  so its "selects and stops there" is the ADR's prose and not yet its code. This
+  shell implements the prose — two values, and the gate reads only the open one.
+
 ## ADR-0030 · 配对 is gone, the lists take a pull, and a selected filter is not an accent
 
 Three things; the first is the same decision the desktop's ADR-0128 records, from
