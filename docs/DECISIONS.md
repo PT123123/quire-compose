@@ -253,16 +253,22 @@ can still send it, and `/sync/pair` is part of the wire protocol in quire-core, 
 deleting one end would break a peer's round rather than tidy anything.
 
 **收件箱 and 任务 take a pull to refresh**, wrapping each `LazyColumn` in
-`OrgPullRefresh` — a `NestedScrollConnection`, ~60 lines, no new dependency.
+`QuirePullRefresh` — a `NestedScrollConnection`, no new dependency.
 Material 3's own `PullToRefreshBox` is the right widget and is not available
 here: it landed in material3 1.3 and this build is on compose-bom 2024.06.00, so
 taking it means bumping the BOM under every screen to get one gesture. The
 contract it keeps: it pulls **only** at the top of the list (past row 0 every
 delta is handed back, so an upward scroll is the list's own fling and nothing
-here touches it), the drag is rubber-banded and capped, and `busy` blocks a second
-pull — the indicator and the bar's 刷新 are the same fact on two surfaces. The
-board is left alone: its columns scroll sideways and a vertical pull there is a
-different gesture with a different meaning.
+here touches it), the drag is rubber-banded and capped, and the list itself
+rides down with the drag so the gap above it is the pull made visible — the
+indicator sits in that gap instead of being buried under row 0. The gesture is
+**not** gated on `busy`: the sync's background timer sets that flag too, and a
+pull that only worked between rounds would read as broken. Instead a pull of the
+user's own sets a hold, and the spinner stays out until `busy` falls — floored so
+a pull that starts no round does not flash, and capped so a round that never
+answers cannot pin the list down. The board is left alone: its columns scroll
+sideways and a vertical pull there is a different gesture with a different
+meaning.
 
 **A selected filter chip is neutral.** `OrgChip`'s selected fill was
 `surfaceSelected` — 22% accent, a blue plate for 全部笔记, which is lit by

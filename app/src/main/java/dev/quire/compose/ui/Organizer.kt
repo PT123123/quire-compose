@@ -1,5 +1,7 @@
 package dev.quire.compose.ui
 
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -53,6 +55,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -66,15 +69,19 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -82,6 +89,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -112,7 +120,9 @@ import dev.quire.compose.QuireViewModel
 import dev.quire.compose.bridge.OrgCatalog
 import dev.quire.compose.bridge.SyncState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 /**
@@ -2627,7 +2637,7 @@ private fun OrgEmpty(text: String, hint: String) {
  * Material 3's own `PullToRefreshBox` is the right widget and it is not available
  * here: this build is on compose-bom 2024.06.00, and that API landed in
  * material3 1.3 — taking it would mean bumping the BOM under every screen in the
- * app to get one gesture. So this is the same idea in ~60 lines, on
+ * app to get one gesture. So this is the same idea, on
  * [NestedScrollConnection], which is the mechanism the widget uses underneath and
  * which costs no dependency at all.
  *
@@ -2636,20 +2646,25 @@ private fun OrgEmpty(text: String, hint: String) {
  *
  * * **It only pulls when the list is already at the top.** The connection reads
  *   `LazyListState.firstVisibleItemIndex` and, once past row 0, hands every delta
- *   straight back with `available = 0` — so a scroll *up* through the list is the
- *   list's own fling and nothing here touches it. Without that check a pull would
- *   fight every upward scroll, which is the classic way this gesture goes wrong.
- * * **The pull is rubber-banded and capped** at [THRESHOLD], so a long drag cannot
- *   drag the header off the screen, and the further you pull past the threshold the
+ *   straight back — so a scroll *up* through the list is the list's own fling and
+ *   nothing here touches it. Without that check a pull would fight every upward
+ *   scroll, which is the classic way this gesture goes wrong.
+ * * **The list itself moves.** The whole `content` rides down by the drag and the
+ *   gap it leaves at the top is the pull made visible — the indicator sits in that
+ *   gap rather than being buried under row 0, which is what makes the gesture read
+ *   as the list giving way instead of nothing happening.
+ * * **The pull is rubber-banded and capped** at [PULL_MAX], so a long drag cannot
+ *   drag the list off the screen, and the further you pull past the threshold the
  *   less it gives — the standard resistance curve, one line.
- * * **A refresh in flight cannot be pulled again.** `busy` comes from the sync
- *   state, so the indicator here and the spinner in the 同步 bar are the same
- *   fact on two surfaces, and a second pull while a round is running does
- *   nothing rather than queueing a second one.
+ * * **A pull in flight cannot be pulled again**, and the drag is not gated on
+ *   `busy`: the sync's background timer sets `busy` too, and a gesture that only
+ *   works between rounds is a gesture that seems broken.
  *
- * `onRefresh` is a *request*, and this component does not wait for it: the view
- * answers with the round's progress through `busy`, so the spinner stays up for
- * as long as the round really is.
+ * `onRefresh` is a *request*, and this component does not wait for it: it holds the
+ * spinner out and watches `busy` fall, so the spinner stays up for as long as the
+ * round really is — with a floor under it (a pull that starts no round at all, on a
+ * device with no peers, must not flash) and a ceiling over it (a round that never
+ * answers must not pin the list down).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2662,20 +2677,37 @@ internal fun QuirePullRefresh(
 ) {
     val colors = LocalQuireColors.current
     val scope = rememberCoroutineScope()
-    // The drag distance, in pixels, and the direction it was last travelling. A
-    // state rather than a ref because the header's offset is what draws the
-    // gesture; `remember` keeps it across recomposition and forgets it when the
-    // list leaves the screen, which is right — a half-finished pull is not
-    // something to restore on the way back.
-    var pull by remember { mutableFloatStateOf(0f) }
-    val connection = remember(state) {
+    // `onRefresh` and `busy` are read from the latest composition: the connection
+    // below is `remember`ed, so a value captured in it would freeze at the frame
+    // the list was first drawn.
+    val refresh by rememberUpdatedState(onRefresh)
+    val busyNow = rememberUpdatedState(busy)
+    val density = LocalDensity.current
+    val thresholdPx = with(density) { PULL_THRESHOLD.toPx() }
+    val maxPx = with(density) { PULL_MAX.toPx() }
+    val holdPx = with(density) { PULL_HOLD.toPx() }
+    val dotPx = with(density) { PULL_DOT.toPx() }
+
+    // How far the list is pushed down, in pixels. Written straight from the drag
+    // callbacks — the finger's own frames must not wait on a coroutine — and only
+    // animated through the release. `remember` keeps it across recomposition and
+    // forgets it when the list leaves the screen, which is right: a half-finished
+    // pull is not something to restore on the way back.
+    var offset by remember { mutableFloatStateOf(0f) }
+    // A round this gesture started is running: the list stays down and the spinner
+    // stays out until the round answers.
+    var refreshing by remember { mutableStateOf(false) }
+    // Recompose on the threshold crossing only, not on every drag frame.
+    val armed by remember { derivedStateOf { offset >= thresholdPx } }
+
+    val connection = remember(state, thresholdPx, maxPx, holdPx) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                // Released upward while a pull is showing: close it, and keep the
-                // leftover drag out of the list so the header does not jump.
-                if (available.y > 0f && pull > 0f) {
-                    val taken = minOf(available.y, pull)
-                    pull = (pull - taken).coerceAtLeast(0f)
+                // Dragged back up while a pull is showing: spend it on the pull
+                // before the list sees it, so nothing jumps under the finger.
+                if (!refreshing && available.y > 0f && offset > 0f) {
+                    val taken = minOf(available.y, offset)
+                    offset -= taken
                     return Offset(0f, taken)
                 }
                 return Offset.Zero
@@ -2688,54 +2720,95 @@ internal fun QuirePullRefresh(
             ): Offset {
                 // `onPreScroll` is where a pull is *spent*; this is the leftover a
                 // child could not use, which is the over-scroll at the top.
-                if (available.y <= 0f || busy) return Offset.Zero
+                if (available.y <= 0f || refreshing) return Offset.Zero
                 if (state.firstVisibleItemIndex > 0 || state.firstVisibleItemScrollOffset > 0) {
                     return Offset.Zero
                 }
-                val resistance = (1f - (pull / PULL_MAX)).coerceIn(0.12f, 1f)
-                pull = (pull + available.y * resistance).coerceIn(0f, PULL_MAX)
+                val resistance = (1f - (offset / maxPx)).coerceIn(0.12f, 1f)
+                offset = (offset + available.y * resistance).coerceIn(0f, maxPx)
                 return Offset(0f, available.y)
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (pull < THRESHOLD) {
-                    pull = 0f
+                if (refreshing) return Velocity.Zero
+                if (offset < thresholdPx) {
+                    // Short pull: it was not a refresh, let the list go back.
+                    animate(offset, 0f, animationSpec = tween(200)) { value, _ -> offset = value }
                     return Velocity.Zero
                 }
-                // Past the threshold: this is the gesture the user meant. Close the
-                // header immediately — waiting for `busy` would leave it hanging
-                // there for the length of the round — and ask for the round.
-                pull = 0f
-                scope.launch { onRefresh() }
+                // Past the threshold: this is the gesture the user meant. Take the
+                // list down to the spinner's resting height and ask for the round.
+                refreshing = true
+                animate(offset, holdPx, animationSpec = tween(180)) { value, _ -> offset = value }
+                scope.launch { refresh() }
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                // A gesture that ended without a fling still has to put the list
+                // back; `onPreFling` should have done it, so this is only the net
+                // under a drag the system cancelled out from under us.
+                if (!refreshing && offset > 0f) {
+                    animate(offset, 0f, animationSpec = tween(200)) { value, _ -> offset = value }
+                }
                 return Velocity.Zero
             }
         }
     }
-    Box(modifier = modifier.nestedScroll(connection)) {
-        // The header rides *under* the list, so the list draws over it and the
-        // gap between the first row and the filter bar is the pull made visible.
-        // It is drawn first and clipped by the same box, which is what makes the
-        // rows appear to push it down rather than a bar sliding in from nowhere.
+
+    // Hold the spinner for as long as the round really runs — never less than a
+    // beat, never more than the cap.
+    LaunchedEffect(refreshing) {
+        if (!refreshing) return@LaunchedEffect
+        delay(SPIN_MIN_MS)
+        withTimeoutOrNull(SPIN_MAX_MS) { snapshotFlow { busyNow.value }.first { !it } }
+        animate(offset, 0f, animationSpec = tween(220)) { value, _ -> offset = value }
+        refreshing = false
+    }
+
+    Box(modifier = modifier.nestedScroll(connection).clipToBounds()) {
+        // The list rides down whole. Reading `offset` in the layout lambda keeps
+        // the drag off the recomposition path — only the draw changes per frame.
+        Box(modifier = Modifier.offset { IntOffset(0, offset.roundToInt()) }) {
+            content()
+        }
+        // The indicator sits in the gap the list just left, centred on it. Its fade
+        // and spin are driven in the draw phase for the same reason.
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .height(with(LocalDensity.current) { pull.toDp() }),
+                .offset { IntOffset(0, ((offset - dotPx) / 2f).roundToInt().coerceAtLeast(0)) }
+                .size(PULL_DOT),
             contentAlignment = Alignment.Center,
         ) {
-            if (pull > 1f) {
-                val armed = pull >= THRESHOLD
+            if (refreshing) {
+                CircularProgressIndicator(
+                    color = colors.accent,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(PULL_DOT),
+                )
+            } else {
                 Icon(
-                    imageVector = if (busy) Icons.Default.Refresh else if (armed) IcUndo else Icons.Default.Refresh,
-                    contentDescription = null,
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "下拉刷新",
                     tint = if (armed) colors.accent else colors.textMuted,
-                    modifier = Modifier.size(22.dp),
+                    modifier = Modifier
+                        .size(PULL_DOT)
+                        .graphicsLayer {
+                            val progress = (offset / thresholdPx).coerceIn(0f, 1f)
+                            rotationZ = progress * 360f
+                            alpha = progress
+                        },
                 )
             }
         }
-        content()
     }
 }
 
-private const val THRESHOLD = 96f
-private const val PULL_MAX = 220f
+private val PULL_THRESHOLD = 72.dp
+private val PULL_MAX = 164.dp
+private val PULL_HOLD = 56.dp
+private val PULL_DOT = 24.dp
+private const val SPIN_MIN_MS = 600L
+private const val SPIN_MAX_MS = 4_000L
 
