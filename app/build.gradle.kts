@@ -227,6 +227,12 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    // 二维码传输: the scanner on the 同步 page and the code it shows. One
+    // dependency, because zxing-android-embedded carries the `core` writer with
+    // it — the same two lines ActivityWatch's WiFi 传输 page is built on, pinned
+    // to the same 4.3.0 so the behaviour above (and the Camera1 focus default
+    // `QrCaptureActivity` works around) is the behaviour that was tested there.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     // No material-icons-extended: the chrome's icons are drawn here
     // (ui/Icons.kt), which is also what the Slint shell does — one fewer
     // multi-megabyte dependency in a UI whose SPEC ranks low RAM above

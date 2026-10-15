@@ -2,6 +2,7 @@ package dev.quire.compose.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -163,7 +164,17 @@ fun CaptureOverlay(vm: QuireViewModel, onDismiss: () -> Unit) {
                     .fillMaxWidth()
                     .heightIn(min = 88.dp)
                     .focusRequester(focusRequester)
-                    .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                    // The panel behind it is `colors.background`, so a bare field
+                    // is the same colour as the sheet it sits on and there is
+                    // nothing to point a finger at. A hairline of the theme's own
+                    // border is what separates them — the same rule the reference
+                    // app draws its composer with, and the reason a new note looks
+                    // typed into *something* rather than into the background.
+                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+                    .clip(RoundedCornerShape(Radius.sm))
+                    .background(colors.card)
+                    .border(1.dp, colors.cardBorder, RoundedCornerShape(Radius.sm))
+                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                 decorationBox = { inner ->
                     if (field.text.isEmpty()) {
                         Text(

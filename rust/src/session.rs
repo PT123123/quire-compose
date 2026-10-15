@@ -405,6 +405,24 @@ pub enum Request {
         #[serde(default)]
         id: String,
     },
+    /// A round with the device a scanned 二维码 named — the by-hand door for a
+    /// network that filters UDP broadcast, and the reason the phone has a camera.
+    ///
+    /// Not a new kind of round: the fields are a [PeerRecord], written into the
+    /// peer book exactly as an announcement would have written it, and the engine
+    /// then runs its ordinary pull-merge-push. A scan is a sighting the user made
+    /// by hand, so it goes down the same road as one the network delivered.
+    ///
+    /// `address` is `ip` or `ip:port`; an absent port is [`SYNC_PORT`], which is
+    /// what every other shell's QR carries.
+    SyncQrPull {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        address: String,
+    },
 }
 
 /// Whether a reply carries the full view.
@@ -916,6 +934,10 @@ impl Session {
             }
             Request::SyncForget { id } => {
                 self.sync_forget_peer(&id)?;
+                Ok(Outcome::Full)
+            }
+            Request::SyncQrPull { id, name, address } => {
+                self.sync_qr_pull(&id, &name, &address)?;
                 Ok(Outcome::Full)
             }
         }

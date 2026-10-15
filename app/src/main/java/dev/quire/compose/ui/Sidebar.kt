@@ -28,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,6 +36,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -182,8 +184,43 @@ fun Sidebar(
         ) {
             Icon(Icons.Default.Settings, contentDescription = null, tint = colors.textSecondary)
             Text("设置", style = QuireType.ui, color = colors.textPrimary)
+            // Which build this is, on the row that opens 设置 rather than inside
+            // the sheet: a bug report starts with 「哪个版本」, and the answer is
+            // then already on screen instead of one sheet and one scroll away.
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "v${appVersion()}",
+                style = QuireType.caption,
+                color = colors.textMuted,
+                maxLines = 1,
+            )
         }
     }
+}
+
+/**
+ * The installed APK's `versionName`, or `?` where the platform will not say.
+ *
+ * Read from `PackageManager` rather than generated into `BuildConfig` so the
+ * number can never disagree with the one Gradle put in the manifest — the whole
+ * point of showing it is that it is the truth about what is installed.
+ */
+@Composable
+private fun appVersion(): String {
+    val context = LocalContext.current
+    return remember(context) {
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    android.content.pm.PackageManager.PackageInfoFlags.of(0),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }.versionName.orEmpty()
+        }.getOrDefault("")
+    }.ifEmpty { "?" }
 }
 
 /** One row of the tree: fold control, icon-or-initial, title. */

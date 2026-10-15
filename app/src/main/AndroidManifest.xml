@@ -15,6 +15,17 @@
          the only new permission the aggressive-on-Wi-Fi policy costs. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- 二维码传输: reading the other device's sync code, and nothing else. The
+         prompt is asked when 「扫码接收」 is pressed rather than at launch, which
+         is what makes the request answerable when the user finally sees it. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- A phone without a camera can still show a code and still be reached by
+         one, so this is optional rather than required: `required="false"` keeps
+         the app installable on a camera-less device, where only 出码 is drawn in
+         practice (the scan button reports the missing camera). -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -35,6 +46,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The 同步 page's 扫码接收. Not exported and not in the launcher: it is
+             a step inside this app, and it needs nothing from outside it. The
+             attributes are the library's own `CaptureActivity` ones, including
+             its `zxing_CaptureTheme` — that theme is what the capture layout is
+             written against, and `sensorLandscape` is the orientation the scanner
+             asks for (`setOrientationLocked`). -->
+        <activity
+            android:name=".QrCaptureActivity"
+            android:clearTaskOnLaunch="true"
+            android:exported="false"
+            android:stateNotNeeded="true"
+            android:screenOrientation="sensorLandscape"
+            android:windowSoftInputMode="stateAlwaysHidden"
+            android:theme="@style/zxing_CaptureTheme" />
     </application>
 
 </manifest>

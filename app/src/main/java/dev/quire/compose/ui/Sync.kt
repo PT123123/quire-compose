@@ -1,5 +1,7 @@
 package dev.quire.compose.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +52,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import dev.quire.compose.QuireViewModel
 import dev.quire.compose.bridge.SyncLogRow
 import dev.quire.compose.bridge.SyncRow
@@ -151,6 +156,8 @@ fun SyncPage(vm: QuireViewModel) {
                 }
             }
             items(sync.devices, key = { "device-${it.id}" }) { row -> SyncDevice(row = row, vm = vm) }
+
+            item(key = "qr") { SyncQr(vm = vm) }
 
             item(key = "settings") {
                 SyncSettings(
@@ -346,6 +353,143 @@ private fun SyncDevice(row: SyncRow, vm: QuireViewModel) {
             }
         }
     }
+}
+
+/**
+ * 二维码传输: 出码 and 扫码, the two halves of the by-hand door.
+ *
+ * The device list above is filled by UDP broadcast, and there is no manifest
+ * permission that can make a broadcast arrive — so on a guest Wi-Fi, an AP with
+ * client isolation, or a network that simply drops the port, that list stays empty
+ * forever and the page's own words（「打开另一台设备就会自动同步」）are a promise the
+ * app cannot keep. A code is not filtered by any of that: it is a picture of an
+ * address, and the round behind it is the engine's ordinary one
+ * ([dev.quire.compose.QuireViewModel.syncQrPull]), so a scan converges both sides
+ * exactly as a broadcast would have.
+ *
+ * 相机 permission is asked here rather than at launch, for the ordinary reason:
+ * the app does not need a camera until this button is pressed, and a permission
+ * prompt on a cold start is a question the user has no context for. Refusal is
+ * not a dead end — the address is printed under the code on the other side, and
+ * a device that was heard by broadcast appears in the list above anyway.
+ */
+@Composable
+private fun SyncQr(vm: QuireViewModel) {
+    val colors = LocalQuireColors.current
+    val sync = vm.view?.sync ?: SyncState.Empty
+
+    var showCode by remember { mutableStateOf(false) }
+    var scanError by remember { mutableStateOf<String?>(null) }
+
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val contents = result.contents
+        if (contents.isNullOrBlank()) return@rememberLauncherForActivityResult
+        val payload = QrPayload.fromJson(contents)
+        if (payload == null) {
+            scanError = "这个二维码不是 Quire 的同步码 —— 请扫另一台设备「同步」页出示的那一个"
+            return@rememberLauncherForActivityResult
+        }
+        vm.syncQrPull(payload.id, payload.name, payload.address)
+    }
+
+    val cameraPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            launchScanner(scanLauncher::launch)
+        } else {
+            // Denied is a fact about the device, not a mistake to retry at the
+            // user: the other side's code carries the address in words as well.
+            scanError = "没有相机权限就扫不了码 —— 对方页面上的地址可以直接照着输入，或让两台设备连同一个 Wi-Fi。"
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = 3.dp),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+    ) {
+        SyncSection("二维码传输")
+        Text(
+            text = "同一个网络连不上广播时，用码直接把两台设备配到一起：一边出示，一边扫。",
+            style = QuireType.caption,
+            color = colors.textMuted,
+            modifier = Modifier.padding(horizontal = Spacing.xs),
+        )
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            SyncChoice(
+                label = "出示二维码",
+                selected = showCode,
+                onClick = { showCode = !showCode },
+            )
+            SyncChoice(
+                label = if (sync.busy) "正在同步…" else "扫码接收",
+                selected = false,
+                onClick = {
+                    scanError = null
+                    cameraPermission.launch(android.Manifest.permission.CAMERA)
+                },
+            )
+        }
+        scanError?.let { why ->
+            Text(
+                text = why,
+                style = QuireType.caption,
+                color = colors.danger,
+                modifier = Modifier.padding(horizontal = Spacing.xs, vertical = 2.dp),
+            )
+        }
+    }
+
+    val payload = QrPayload.ofSelf(sync)
+    if (showCode) {
+        AlertDialog(
+            onDismissRequest = { showCode = false },
+            title = { Text("让另一台设备扫这个码") },
+            text = {
+                if (payload == null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                        Text("这台设备现在没有局域网地址，出不了码。", style = QuireType.ui, color = colors.textPrimary)
+                        Text(
+                            "连上 Wi-Fi 后下拉刷新本页，地址栏就会填上；" +
+                                "手机热点、飞行模式下的地址都是拿不到的。",
+                            style = QuireType.caption,
+                            color = colors.textSecondary,
+                        )
+                    }
+                } else {
+                    Column {
+                        QrShareCard(payload)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCode = false }) { Text("关闭", color = colors.accentText) }
+            },
+        )
+    }
+}
+
+/**
+ * 打开扫码页.
+ *
+ * `setCaptureActivity` names [dev.quire.compose.QrCaptureActivity] rather than
+ * taking the library's own screen, and the reason is in that class: the default
+ * one-shot focus latches on some devices and the preview never sharpens. The
+ * prompt is in this shell's words because the code's own words would be in
+ * English, and the scan is one button away from a page the user is reading.
+ */
+private fun launchScanner(launch: (ScanOptions) -> Unit) {
+    val options = ScanOptions().apply {
+        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+        setPrompt("对准另一台设备出示的同步码")
+        setCaptureActivity(dev.quire.compose.QrCaptureActivity::class.java)
+        setBeepEnabled(false)
+        setOrientationLocked(true)
+    }
+    launch(options)
 }
 
 @Composable

@@ -1050,6 +1050,21 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun syncForget(id: String) = act { bridge.syncForget(id) }
 
+    /**
+     * 扫码接收: one round with the device whose code the camera read.
+     *
+     * The payload is parsed on the UI side before this is called, so what arrives
+     * here is a device with an id and an address — and the bridge's refusal of
+     * anything else happens where the message can be read, rather than as a
+     * connect timeout against a host that was never there.
+     *
+     * Everything after this call is the engine's ordinary round, which is what
+     * makes a scan worth having: it is the same merge, the same log line and the
+     * same shadow as a round the network started by itself.
+     */
+    fun syncQrPull(id: String, name: String, address: String) =
+        act { bridge.syncQrPull(id, name, address) }
+
     // ─── the floating 撤销 bar ──────────────────────────────────────────────
     //
     // Two shapes reach the bar. A **delete** is optimistic: the row is hidden at

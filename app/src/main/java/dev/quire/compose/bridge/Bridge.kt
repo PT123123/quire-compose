@@ -285,6 +285,17 @@ class Bridge(private val handle: Long) {
 
     fun syncForget(id: String): Reply = send("syncForget", "id" to id)
 
+    /**
+     * A round with the device a scanned 二维码 named.
+     *
+     * The by-hand door for a network that filters UDP broadcast, and not a new
+     * kind of round: [id]/[name]/[address] become one row of the peer book and the
+     * engine runs its ordinary pull-merge-push against it. [address] is `ip` or
+     * `ip:port`, and an absent port is `quire-core`'s own.
+     */
+    fun syncQrPull(id: String, name: String, address: String): Reply =
+        send("syncQrPull", "id" to id, "name" to name, "address" to address)
+
     /** Flush and free the native session. After this the handle is dead. */
     fun close() = Native.close(handle)
 

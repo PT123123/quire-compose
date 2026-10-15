@@ -48,6 +48,8 @@ app/                    the Compose app (Kotlin)
       Notes.kt          a note's own page, 详细信息, and its replies
       CaptureOverlay.kt the instant capture panel both destinations share
       Sync.kt           同步: the device list, the pairing verbs and the timer
+      QrTransfer.kt     二维码传输: the code's payload, its bitmap and the card
+      QrCaptureActivity.kt the 扫码 page (zxing, continuous focus)
   src/test/             the unit tests that need no device
 rust/                   the bridge crate: cdylib + rlib, JNI, `cargo test` on the host
   src/lib.rs            the four exported symbols
@@ -173,9 +175,17 @@ discovery 5879, the version-4 snapshot, a three-way merge against a per-peer sha
 
 - The device list: this device's alias and address, **已配对的设备** with 在线/离线
   and 上次同步, and **已发现的设备** with 发起配对. Devices are found by the
-  engine's broadcast and paired from their row — there is no by-hand address.
+  engine's broadcast and paired from their row; the one door that is by hand is a
+  scanned code (below).
 - 立即同步 and 忘记 per device; 10 秒 / 1 分 / 5 分 / 30 分 / 仅手动 for the interval;
   the last dozen log lines.
+- **二维码传输**, the by-hand door for a network that filters the broadcast:
+  出示二维码 shows a code for this device's address (with the address spelled out
+  under it), 扫码接收 reads the other device's and starts a round with it. The code
+  carries the door and not the data — a workspace is far past what a QR holds — so
+  what runs behind a scan is the engine's ordinary pull-merge-push, one round in
+  both directions. ActivityWatch's WiFi-transfer shape, and its capture screen
+  (`QrCaptureActivity`) down to the continuous-focus fix its library default needs.
 - **Opening the page is what puts this device on the LAN** — the engine's threads
   and its socket start with the first request, so nothing listens otherwise. The
   engine's work is answered on the ordinary one-second tick.
@@ -203,8 +213,10 @@ Said plainly, because a shell that pretends is worse than one that is small:
   (ADR-0016).
 - **The read-only LAN share** (port 5877, `quire-core`'s other LAN module) is still
   not wired, and neither are the reference app's pairing codes, per-device
-  statistics, conflict lists, or its cloud / backup / WiFi-transfer siblings —
-  `quire-core` has none of those.
+  statistics, conflict lists, or its cloud and backup siblings —
+  `quire-core` has none of those. Its WiFi-transfer sibling is here in the QR
+  form above: the two devices have to be on one network either way, so what the
+  scan replaces is the broadcast rather than the network.
 - **Backspace on an empty block** does not merge it into the one above: a soft
   keyboard's backspace is not a key event a Compose text field can see. Deleting
   an empty block goes through the block menu. (The organizer's fields do not need
