@@ -30,10 +30,15 @@ crate-type = ["cdylib", "rlib"]
 # commit is on `origin`: a shell cannot build against an unpublished commit, so the
 # core lands and is pushed first and the pin follows.
 #
-# `bc6f55a` adds core ADR-0005 (a `busy_timeout`), which is a fix rather than a
-# change: the wire format, the snapshot version and the merge are all untouched, so
-# a peer on the previous rev still syncs with this one.
-quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "bc6f55a" }
+# `c40ea56` adds core ADR-0129: a row the peer does not have is a deletion only
+# when the shadow saw it, and a peer whose whole snapshot is empty is refused
+# whole. Both are fixes to what a round may do to a library rather than a change
+# to any shape — the wire format, the snapshot version and the merge's output for
+# an ordinary two-device library are all untouched, so a peer on the previous rev
+# still syncs with this one. A device that had already lost rows to an empty peer
+# is not repaired by it: the rows are gone, and the backups are the only place
+# they are.
+quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "c40ea56" }
 jni = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
