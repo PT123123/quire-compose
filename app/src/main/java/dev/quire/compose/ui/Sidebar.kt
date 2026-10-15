@@ -147,8 +147,15 @@ fun Sidebar(
                 }
             }
 
-            item(key = "pages-header") { SectionHeader("页面") }
-            items(view.pages.size, key = { "page-${view.pages[it].id}" }) { index ->
+            item(key = "pages-header") { SectionHeader("文档") }
+            items(
+                view.pages.size,
+                // Index-qualified on purpose: a library whose pages came back
+                // from a merge with colliding ids would die in the slot table
+                // (`SlotTableKt.key`, length=0 index=-5) rather than draw, and the
+                // position is what makes the key unique whatever the ids are.
+                key = { index -> "page-${index}-${view.pages[index].id}" },
+            ) { index ->
                 val page = view.pages[index]
                 PageTreeRow(
                     page = page,

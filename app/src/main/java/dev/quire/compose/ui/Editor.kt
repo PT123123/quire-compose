@@ -14,13 +14,18 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalOverscrollConfiguration
+
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +55,7 @@ private const val TITLE_DEBOUNCE_MS = 350L
  * page can hold thousands of rows, and this is the same decision the Slint shell
  * made (ADR-0003) — only what is on screen costs anything.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun EditorScreen(
     view: View,
@@ -59,7 +65,16 @@ fun EditorScreen(
     val colors = LocalQuireColors.current
     val listState = rememberLazyListState()
     val numbers = remember(view.blocks) { numberedLabels(view.blocks) }
+    val rowKey = remember(view.blocks) { blockRowKeys(view.blocks) }
 
+    // **No overscroll stretch on this list.** The stretch effect subcomposes the
+    // list to draw its bounce, which walks a slot table it does not own; with the
+    // document's rows that is one more place a composition group can go missing.
+    // There is nothing above the first block to bounce against, so turning it off
+    // costs nothing here. (The document-page crash was an early `return@Row` in
+    // `BlockRowView` — that file — not overscroll, but dropping the stretch removes
+    // a second, independent route to the same corruption.)
+    CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().imePadding(),
@@ -68,7 +83,22 @@ fun EditorScreen(
         item(key = "page-header") {
             PageHeader(view = view, vm = vm)
         }
-        items(view.blocks, key = { it.id }) { block ->
+        itemsIndexed(
+            view.blocks,
+            // **A key that is unique among the rows, whatever the core handed
+            // us.** `LazyColumn` addresses its slot table by these, and a
+            // duplicate reads out of bounds — `ArrayIndexOutOfBoundsException:
+            // length=0; index=-5` inside `SlotTableKt.key`, which surfaces as
+            // the whole page dying rather than as a wrong row. A library whose
+            // blocks came back from a merge with colliding ids must still open;
+            // the collision is the core's problem to report, and this file's is
+            // to not crash the user over it.
+            //
+            // Indexed on purpose: the fallback key is built from the row's
+            // position, so it is only available by position, and taking it by
+            // index is what keeps a colliding id from colliding *again*.
+            key = { index, _ -> rowKey[index] },
+        ) { _, block ->
             BlockRowView(
                 row = block,
                 numberLabel = numbers[block.id],
@@ -98,6 +128,7 @@ fun EditorScreen(
             }
         }
     }
+    }
 }
 
 /**
@@ -112,7 +143,14 @@ fun EditorScreen(
 private fun PageHeader(view: View, vm: QuireViewModel) {
     val colors = LocalQuireColors.current
     val focus = LocalFocusManager.current
-    val pageId = view.activePage ?: return
+    // **No early return.** A composable that emits nothing leaves the caller's
+    // group with no content where it had recorded one, and the slot table is
+    // walked by index — opening a document crashed with
+    // `ArrayIndexOutOfBoundsException: length=0; index=-5` inside
+    // `SlotTableKt.key`, under the LazyColumn's own measure. A page id that is
+    // not there is a header with no page in it, and it still has to occupy its
+    // group; the title row simply draws nothing.
+    val pageId = view.activePage
 
     var title by remember(pageId) { mutableStateOf(view.title) }
     var dirty by remember(pageId) { mutableStateOf(false) }
@@ -121,7 +159,7 @@ private fun PageHeader(view: View, vm: QuireViewModel) {
         if (!dirty && view.title != title) title = view.title
     }
     LaunchedEffect(pageId, title, dirty) {
-        if (!dirty) return@LaunchedEffect
+        if (!dirty || pageId == null) return@LaunchedEffect
         delay(TITLE_DEBOUNCE_MS)
         vm.renamePage(pageId, title)
         dirty = false
@@ -211,4 +249,38 @@ private fun numberedLabels(blocks: List<BlockRow>): Map<Long, String> {
         }
     }
     return labels
+}
+
+/**
+ * One key per block, unique even when the core's ids are not.
+ *
+ * The core's `blocks.id` is a PRIMARY KEY, so this cannot happen — but it *did*,
+ * and the page died with `ArrayIndexOutOfBoundsException` inside the slot table
+ * rather than with anything a bug report could be written from. A merge can hand
+ * two rows the same id if the two sides minted one each and the renumber missed;
+ * the row is still a row, and it still has to draw.
+ *
+ * So the key is the id when it is unique, and the id **plus its position** when it
+ * is not — which keeps every well-formed library on the cheap, stable key (the
+ * whole point of `key` is to survive a reorder), and only pays for the fallback
+ * where it is actually needed. Collisions are counted so the caller can say so
+ * rather than silently drawing two rows under one identity.
+ */
+private fun blockRowKeys(blocks: List<BlockRow>): List<String> {
+    val seen = HashMap<Long, Int>(blocks.size * 2)
+    for (block in blocks) seen.merge(block.id, 1, Int::plus)
+    val used = HashSet<String>(blocks.size * 2)
+    return blocks.map { block ->
+        val candidate = if (seen[block.id] == 1) "b${block.id}" else "b${block.id}@${block.depth}"
+        // Two rows that differ only in depth would still collide; a trailing
+        // counter is the last resort, and reaching it means the core's ids are
+        // worse than colliding.
+        var key = candidate
+        var n = 1
+        while (!used.add(key)) {
+            key = "$candidate~$n"
+            n++
+        }
+        key
+    }
 }

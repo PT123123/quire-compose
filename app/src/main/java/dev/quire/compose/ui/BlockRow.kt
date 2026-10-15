@@ -111,15 +111,21 @@ fun BlockRowView(
             onToggleFold = onToggleFold,
         )
 
+        // **No early `return` out of this lambda.** `Row`'s content is an inline
+        // `@Composable` lambda, so `return@Row` is a *non-local* return: it exits
+        // `BlockRowView` before the compiler closes the row's composition group,
+        // leaving the slot table one group short. `endRoot` then seeks slot index
+        // -5 out of an empty table and the whole document dies with
+        // `ArrayIndexOutOfBoundsException: length=0; index=-5` in `SlotTableKt.key`
+        // — the document-page crash. The three shapes (divider, placeholder, text)
+        // are mutually exclusive, so `else if / else` keeps the lambda always
+        // running to its close and the group always balanced.
         if (row.kind == "divider") {
             HorizontalDivider(
                 modifier = Modifier.padding(vertical = 14.dp).weight(1f),
                 color = colors.divider,
             )
-            return@Row
-        }
-
-        if (BlockKinds.isPlaceholder(row.kind)) {
+        } else if (BlockKinds.isPlaceholder(row.kind)) {
             PlaceholderBody(
                 row = row,
                 modifier = Modifier.weight(1f),
@@ -127,9 +133,7 @@ fun BlockRowView(
                 onOpenUrl = onOpenUrl,
                 onOpenMenu = onOpenMenu,
             )
-            return@Row
-        }
-
+        } else {
         var text by remember(row.id) { mutableStateOf(row.text) }
         // The model can move under a row without this row being typed into —
         // undo, a redo, another shell on the same library. Re-syncing on a
@@ -172,6 +176,7 @@ fun BlockRowView(
                     .focusRequester(focusRequester)
                     .onFocusChanged { focused = it.isFocused },
             )
+        }
         }
     }
 }

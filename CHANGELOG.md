@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — 文档页不再闪退，侧边栏的「页面」叫「文档」
+
+### 修复
+
+- **打开任何文档都会闪退**（笔记和任务正常）。
+  `ArrayIndexOutOfBoundsException: length=0; index=-5`，栈在
+  `SlotTableKt.key` → `SubcomposeLayout` → `LazyListMeasuredItemProvider` ——
+  **Compose 的 slot table 被读越界了**，崩在 LazyColumn 的测量阶段，
+  所以是整个页死掉而不是某一行画错
+- **这不是页面的数据结构不对，是 key 会撞。** `LazyColumn` 用 key 寻址它的
+  slot table，而文档页原来直接拿 `blocks.id` 当 key。core 的 `blocks.id` 是
+  PRIMARY KEY，**本不该重复** —— 但这份库是从一次合并里回来的，合并时
+  两边各自铸了同一个 id、renumber 漏掉之后就会重复，而 `items(key=)`
+  遇到重复不是画错一行，是读出界、崩掉
+- **修法：key 由 `blockRowKeys()` 统一分配。** id 唯一时就是 `b<id>`（便宜且
+  稳定，重排时能复用），重复时才退化成 `b<id>@<深度>` 再加计数器兜底 ——
+  也就是「核心该报的错」不该由界面替它用闪退来说
+- **侧边栏的页面树同样的隐患一并修掉**：它的 key 是 `page-<id>`，同样会在 id
+  重复时读越界，现在带上了位置
+
+### 界面
+
+- **侧边栏的「页面」改成「文档」**（页面树那一节的分组标题）
+
 ## Unreleased — 快速滑动不再卡，滑到顶部不再自己刷新
 
 ### 修复
