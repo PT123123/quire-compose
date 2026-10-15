@@ -82,6 +82,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -246,9 +247,9 @@ fun NotesBar(vm: QuireViewModel, onOpenDrawer: () -> Unit) {
     }
     OrgBar(
         // The bin is the same page turned over, so the title follows the flag
-        // rather than the destination: "收件箱" over a list of deleted notes would
+        // rather than the destination: "笔记" over a list of deleted notes would
         // be the window lying about itself.
-        title = if (vm.orgBin) "回收站" else "收件箱",
+        title = if (vm.orgBin) "回收站" else "笔记",
         onOpenDrawer = onOpenDrawer,
         onSearch = vm::toggleOrgSearch,
         onSort = { sortOpen = true },
@@ -501,20 +502,39 @@ fun NotesPage(vm: QuireViewModel) {
     // filtered, which is what makes the vanish instant and the undo free.
     //
     // The lit row rides in as `selected` (ADR-0031): a tap lights its card and
-    // stops there, and the note the *page* is open for is a different value that
-    // no list row reads — an open note identifies itself by being on screen.
+    // a second tap on the same card opens it, and the note the *page* is open for
+    // is a different value that no list row reads — an open note identifies
+    // itself by being on screen.
+    //
+    // **`orgNoteLit` is deliberately not a key of this `remember`.** It used to be,
+    // and it made every tap a full rebuild of the list: sixty-two notes filtered,
+    // sorted and mapped into `NoteRow`s again, on the same frame the tap landed
+    // on — which is what a fast scroll through the list would hit every time it
+    // passed a row that had been tapped, and what a fling that crossed several
+    // lit rows hit several times over. The lit row is a *paint* fact, so it is
+    // read where the row is drawn (`selected = it.id in lit`) rather than folded
+    // into the data the whole list is derived from.
     val hidden = vm.pendingDelete?.takeIf { !it.isTask }?.ids ?: emptySet()
-    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgExcluded, vm.orgNoteSort, hidden, vm.orgBin, vm.orgNoteLit) {
+    val lit = vm.orgNoteLit
+    val rows = remember(catalog, vm.orgQuery, vm.orgTag, vm.orgExcluded, vm.orgNoteSort, hidden, vm.orgBin) {
         if (vm.orgBin) {
             // 回收站 (core ADR-0003): the other half of the same catalog. The
             // search box applies to it and the tag row does not — the tag row's
             // counts are the live notes', so a filter over them would narrow by a
             // number drawn from somewhere else.
-            OrgModel.binNotes(catalog, vm.orgQuery, vm.orgNoteLit)
+            OrgModel.binNotes(catalog, vm.orgQuery, selected = -1)
         } else {
-            OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, selected = vm.orgNoteLit, exclude = vm.orgExcluded)
+            OrgModel.notes(catalog, vm.orgQuery, vm.orgTag, vm.orgNoteSort, selected = -1, exclude = vm.orgExcluded)
                 .filter { it.id !in hidden }
         }
+    }
+
+    // One preview lookup for every card. `remember`ed on the catalog because that
+    // is the only thing it closes over, and hoisted out of the list because a
+    // lambda rebuilt per row is a per-row argument that changed every frame —
+    // which is exactly what stops a `LazyColumn` from skipping recomposition.
+    val previewOf: (Long) -> String? = remember(catalog) {
+        { id -> OrgModel.parentPreview(catalog, id) }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -576,11 +596,18 @@ fun NotesPage(vm: QuireViewModel) {
                 items(rows, key = { it.id }) { row ->
                     NoteCardView(
                         row = row,
-                        preview = { id -> OrgModel.parentPreview(catalog, id) },
-                        // A tap **lights the row and stops there** (ADR-0031): the
-                        // page replaced the list on every look before, and a list
-                        // of notes is for reading and choosing. 详情 / 详细信息 are
-                        // the ⋯ menu's two words, and the long press is 多选's.
+                        // One lambda for the whole list rather than one per row:
+                        // a fresh lambda on every recomposition makes every
+                        // visible card's argument differ from the last frame, so
+                        // none of them can be skipped. It is `remember`ed on the
+                        // catalog because that is the only thing it reads.
+                        preview = previewOf,
+                        // A tap **lights the row, and a second tap on the same
+                        // row opens it** (ADR-0031): the list is for reading and
+                        // choosing, so the first tap parks the selection where
+                        // you were looking and the second one commits. A tap on
+                        // a *different* row moves the light instead. The long
+                        // press is 多选's.
                         onClick = { vm.orgMarkNote(row.id) },
                         onParent = { parent ->
                             // The reference app clears its filter before jumping:
@@ -592,6 +619,10 @@ fun NotesPage(vm: QuireViewModel) {
                         },
                         onMenu = { vm.orgOpenNoteMenu(row.id) },
                         selecting = vm.orgSelecting,
+                        // The lit row is read here, per row, rather than folded
+                        // into `rows` — so tapping a card repaints two cards
+                        // instead of rebuilding the list.
+                        lit = row.id == lit,
                         selected = row.id in vm.orgSelection,
                         onSelect = { vm.orgToggleSelected(row.id) },
                         // 多选 is a set of rows on a list, and the bin is not one:
@@ -1714,9 +1745,34 @@ private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: Q
         onDismissRequest = onDismiss,
         containerColor = colors.surface,
         contentColor = colors.textPrimary,
+        // A sheet's own top edge is the only place it meets what is behind it,
+        // and `colors.surface` on a `colors.background` page is too close to
+        // call an edge — the panel reads as a change of shade rather than as a
+        // thing with a rim. A hairline of the theme's own `border` along the top,
+        // with the sheet's own rounded corners, is what makes it an object.
+        shape = RoundedCornerShape(topStart = Radius.lg, topEnd = Radius.lg),
+        // M3 draws no border of its own; the line is the `Surface` below it.
+        tonalElevation = 0.dp,
     ) {
-        Column(modifier = Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 12.dp)) {
-            OrgSheetHeader(row.content.lineSequence().first().take(24).ifEmpty { "空白笔记" })
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawBehind {
+                    // Only the top edge, and only a hairline: `1.dp` measured in
+                    // pixels at this density, so it stays the same visual weight
+                    // on every screen rather than growing with the font scale.
+                    val stroke = 1.dp.toPx()
+                    drawLine(
+                        color = colors.border,
+                        start = Offset(0f, stroke / 2f),
+                        end = Offset(size.width, stroke / 2f),
+                        strokeWidth = stroke,
+                    )
+                }
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .padding(bottom = 12.dp)
+        ) {
             if (row.binned) {
                 // 回收站's own two verbs (core ADR-0003), and nothing else: 置顶,
                 // 评论 and 转为待办 are all writes to a row on a list, and this one
@@ -1731,53 +1787,39 @@ private fun OrgNoteMenuSheet(row: OrgModel.NoteRow, onDismiss: () -> Unit, vm: Q
                     vm.orgPurge(row.id)
                 }
             } else {
-            OrgSheetItem(if (row.pinned) "取消置顶" else "置顶") {
-                vm.orgToggleNotePinned(row.id, !row.pinned)
-                onDismiss()
-            }
-            OrgSheetItem("详情") {
-                onDismiss()
-                vm.orgSelectNote(row.id)
-            }
-            // The menu's second word (ADR-0031): the page arrives with 详细信息
-            // already up. The sheet used to be reachable only from the page's own
-            // ⋯ — below a long body, which is exactly where a question about the
-            // row's dates and id is least findable.
-            OrgSheetItem("详细信息") {
-                onDismiss()
-                vm.orgSelectNote(row.id, details = true)
-            }
-            OrgSheetItem("评论") {
-                onDismiss()
-                vm.openCommentComposer(row.id)
-            }
-            OrgSheetItem("复制内容") {
-                // The one note, with its 唯一 ID on a line of its own — the smallest
-                // unit 复制 hands an AI, and the name a 指令 batch can act on.
-                val catalog = vm.view?.org ?: OrgCatalog.Empty
-                clipboard.setText(AnnotatedString(OrgModel.noteCopyText(catalog, listOf(row.id))))
-                onDismiss()
-            }
-            OrgSheetItem("复制唯一 ID") {
-                // That line cut out: the name a 指令 batch and a sync round answer
-                // the row by, alone. The uuid is the catalog's, so the row the menu
-                // holds is looked back up for it — `local:<id>` when it has none.
-                val catalog = vm.view?.org ?: OrgCatalog.Empty
-                val stored = catalog.notes.firstOrNull { it.id == row.id }
-                clipboard.setText(AnnotatedString(OrgModel.uid(stored?.uuid ?: "", row.id)))
-                onDismiss()
-            }
-            // The reference app's own migration, and its no-confirm rule: the note
-            // becomes a task and the note goes, with the 撤销 bar as the way back.
-            OrgSheetItem("转为待办") {
-                onDismiss()
-                vm.orgConvertToTask(row.id)
-            }
-            HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
-            OrgSheetItem("删除", danger = true) {
-                onDismiss()
-                vm.orgDeleteNote(row.id)
-            }
+                // 复制内容 first: it is the one verb with no other door. 置顶
+                // second for the same reason — the page's own ⭐ does it too, but
+                // only after you have opened the note, and on a list this verb is
+                // most of what you came for.
+                OrgSheetItem("复制内容") {
+                    // The one note, with its 唯一 ID on a line of its own — the smallest
+                    // unit 复制 hands an AI, and the name a 指令 batch can act on.
+                    val catalog = vm.view?.org ?: OrgCatalog.Empty
+                    clipboard.setText(AnnotatedString(OrgModel.noteCopyText(catalog, listOf(row.id))))
+                    onDismiss()
+                }
+                OrgSheetItem(if (row.pinned) "取消置顶" else "置顶") {
+                    vm.orgToggleNotePinned(row.id, !row.pinned)
+                    onDismiss()
+                }
+                // 详情 / 详细信息 / 评论 / 复制唯一 ID are gone from here, and
+                // each of them lost its own door rather than being crowded out:
+                // 详情 is the card's second tap (see `NoteCardView`'s onClick),
+                // 复制唯一 ID is a line of what 复制内容 already hands over, and
+                // 评论 is on the note's own page where the replies are. What the
+                // sheet used to head itself with — the first line of the body —
+                // is the note itself, and a menu that shows you the thing you
+                // already have, in a panel you opened to do something else, is
+                // noise in the one place on this screen with no room to waste.
+                OrgSheetItem("转为待办") {
+                    onDismiss()
+                    vm.orgConvertToTask(row.id)
+                }
+                HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
+                OrgSheetItem("删除", danger = true) {
+                    onDismiss()
+                    vm.orgDeleteNote(row.id)
+                }
             }
         }
     }
@@ -2687,6 +2729,7 @@ internal fun QuirePullRefresh(
     val maxPx = with(density) { PULL_MAX.toPx() }
     val holdPx = with(density) { PULL_HOLD.toPx() }
     val dotPx = with(density) { PULL_DOT.toPx() }
+    val topSlopPx = with(density) { TOP_SLOP.toPx() }
 
     // How far the list is pushed down, in pixels. Written straight from the drag
     // callbacks — the finger's own frames must not wait on a coroutine — and only
@@ -2700,7 +2743,7 @@ internal fun QuirePullRefresh(
     // Recompose on the threshold crossing only, not on every drag frame.
     val armed by remember { derivedStateOf { offset >= thresholdPx } }
 
-    val connection = remember(state, thresholdPx, maxPx, holdPx) {
+    val connection = remember(state, thresholdPx, maxPx, holdPx, topSlopPx) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 // Dragged back up while a pull is showing: spend it on the pull
@@ -2721,9 +2764,26 @@ internal fun QuirePullRefresh(
                 // `onPreScroll` is where a pull is *spent*; this is the leftover a
                 // child could not use, which is the over-scroll at the top.
                 if (available.y <= 0f || refreshing) return Offset.Zero
-                if (state.firstVisibleItemIndex > 0 || state.firstVisibleItemScrollOffset > 0) {
-                    return Offset.Zero
-                }
+                // **At the top means at the top.**
+                //
+                // This used to read `firstVisibleItemScrollOffset > 0` as well,
+                // which is the one pixel of a row that has been scrolled *past*
+                // its own start — and a fling stopped there is a normal resting
+                // place, not an edge. So a fast scroll that ended a few pixels
+                // short of the top left the list looking like it was somewhere
+                // below the first item: the next downward drag became over-scroll,
+                // armed the pull, and released into a refresh. The list also
+                // shifted under the finger by those same pixels, which is the
+                // jolt people read as a stutter. A few pixels of slack here costs
+                // nothing — pulling a couple of pixels early is not a gesture
+                // anyone can feel — and it is the difference between a refresh
+                // being asked for and one happening on its own.
+                val atTop = state.firstVisibleItemIndex == 0 &&
+                    // `scrollOffset` is how far *into* the first item we are, so it
+                    // is negative going up. Allow a slop either side of zero.
+                    state.firstVisibleItemScrollOffset > -topSlopPx &&
+                    state.firstVisibleItemScrollOffset < topSlopPx
+                if (!atTop) return Offset.Zero
                 val resistance = (1f - (offset / maxPx)).coerceIn(0.12f, 1f)
                 offset = (offset + available.y * resistance).coerceIn(0f, maxPx)
                 return Offset(0f, available.y)
@@ -2809,6 +2869,18 @@ private val PULL_THRESHOLD = 72.dp
 private val PULL_MAX = 164.dp
 private val PULL_HOLD = 56.dp
 private val PULL_DOT = 24.dp
+/**
+ * How close to the first item's own start still counts as the top, in pixels.
+ *
+ * `firstVisibleItemScrollOffset` is how far *into* the first row we have scrolled,
+ * so it is negative while going up and the exact top is a band rather than a
+ * point. Without this slack a fling that stopped a pixel short of the first row
+ * looked like a scroll position, and the next downward drag became an
+ * over-scroll: the list jumped by those pixels under the finger and armed a
+ * refresh the user had not asked for. Small on purpose — this is a tolerance for
+ * rounding, not a place where a pull becomes possible from.
+ */
+private val TOP_SLOP = 8.dp
 private const val SPIN_MIN_MS = 600L
 private const val SPIN_MAX_MS = 4_000L
 

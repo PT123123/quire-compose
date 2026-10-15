@@ -100,10 +100,10 @@ fun Sidebar(
         // SPEC §四十一: the way into the other two pages, in the same place the
         // reference app keeps them — two rows under the header, above the tree.
         // They are *destinations*, which is why they are separate rows and not two
-        // tabs on one screen: 收件箱 and 任务 have their own toolbars and their own
+        // tabs on one screen: 笔记 and 任务 have their own toolbars and their own
         // state, and the drawer is the only thing between them (ADR-0013).
         SidebarAction(
-            label = "收件箱",
+            label = "笔记",
             icon = Icons.Default.Edit,
             onClick = onOpenNotes,
             selected = activeDestination == DEST_NOTES,

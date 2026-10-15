@@ -710,13 +710,34 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * A tap on a note card: **lights the row and stops there** (ADR-0031). This
-     * used to open the page, which meant reading a list meant leaving it five
-     * times; the desktop took the raise off its click for the same reason. The
-     * lit row is also what the ⋯ menu's verbs are then seen to act on.
+     * A tap on a note card: **the first tap lights the row, a second tap on the
+     * same row opens it** (ADR-0031).
+     *
+     * Opening the page used to be the only door, which meant reading a list meant
+     * leaving it five times; the desktop took the raise off its click for the same
+     * reason. So the tap parks the selection where you were looking, and the
+     * second one commits — a tap on a *different* row moves the light instead of
+     * opening anything, so scrolling a long list does not stack up pages nobody
+     * asked for. The lit row is also what the ⋯ menu's verbs are seen to act on.
+     *
+     * The lit row is a paint fact and nothing more: the list derives its rows
+     * from the catalog, and folding `orgNoteLit` into that would rebuild all
+     * sixty-two of them on every tap — which is what made a fast scroll stutter
+     * every time it crossed a row that had been tapped.
      */
     fun orgMarkNote(id: Long) {
-        orgNoteLit = id
+        // **A tap lights the row; a second tap on the same row opens it.**
+        //
+        // The page used to be the only door, and the list is for reading and
+        // choosing — so the first tap parks the selection where you were looking
+        // and the second one commits. Tapping a *different* row moves the light
+        // rather than opening anything, which is what keeps a scroll through a
+        // long list from turning into a pile of pages nobody asked for.
+        if (orgNoteLit == id) {
+            orgSelectNote(id)
+        } else {
+            orgNoteLit = id
+        }
     }
 
     /**

@@ -86,6 +86,17 @@ internal fun NoteCardView(
     /** 多选: the page is picking notes, so a tap toggles rather than opens. */
     selecting: Boolean = false,
     selected: Boolean = false,
+    /**
+     * **This row is the one a tap parked the light on** (ADR-0031).
+     *
+     * Its own parameter rather than a field of [row], because the list must not
+     * rebuild to move it: `row.selected` lives in the `NoteRow` that
+     * `OrgModel.notes` derives from the catalog, which is `remember`ed over the
+     * whole collection — so a lit row that travelled inside it made every tap
+     * refilter and resort all sixty-two rows. Reading it here repaints the two
+     * cards whose answer changed and leaves the rest of the list alone.
+     */
+    lit: Boolean = row.selected,
     onSelect: (() -> Unit)? = null,
     /** A long press *starts* 多选 — a finger cannot hover, so this is the way in. */
     onLongSelect: (() -> Unit)? = null,
@@ -102,10 +113,10 @@ internal fun NoteCardView(
             .fillMaxWidth()
             .padding(horizontal = 6.dp, vertical = 3.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (selected || row.selected) colors.surfaceSelected else colors.card)
+            .background(if (selected || lit) colors.surfaceSelected else colors.card)
             .border(
                 1.dp,
-                if (selected || row.selected) colors.accent else colors.cardBorder,
+                if (selected || lit) colors.accent else colors.cardBorder,
                 RoundedCornerShape(12.dp),
             )
             .then(gesture)
@@ -233,11 +244,17 @@ fun NoteDetailPage(row: OrgModel.NoteRow, catalog: OrgCatalog, vm: QuireViewMode
                 color = colors.textPrimary,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(onClick = { vm.orgToggleNotePinned(row.id, !row.pinned) }) {
-                Icon(
-                    Icons.Default.Star,
-                    contentDescription = if (row.pinned) "取消置顶" else "置顶",
-                    tint = if (row.pinned) colors.accentText else colors.textMuted,
+            // **置顶 as a word, not a star.** The ⋯ menu's 置顶 is gone (the menu
+            // is now the two verbs that have no other door), so this button is
+            // the only one on the note's own page — and a five-pointed star
+            // reads as 收藏 to anyone who has used any other app, which is a
+            // different thing entirely and one this library does not have. The
+            // label says which one it is; the pin glyph is the shape the action
+            // actually has.
+            TextButton(onClick = { vm.orgToggleNotePinned(row.id, !row.pinned) }) {
+                Text(
+                    text = if (row.pinned) "取消置顶" else "置顶",
+                    color = if (row.pinned) colors.accentText else colors.textSecondary,
                 )
             }
             IconButton(onClick = { detailsOpen = true }) {
