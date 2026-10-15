@@ -952,3 +952,164 @@ fn the_fastest_preset_is_the_number_it_says() {
     );
 }
 
+
+/// **A scanned 二维码 admits the device it names, and asks for a round with it.**
+///
+/// The camera is the by-hand door for a network that filters UDP broadcast
+/// (ADR-0029 leaves no other one), so the scan cannot be a second-class round: it
+/// writes the peer book through the same call an announcement uses — which is what
+/// lets the peer's own push-back be recognised — and then hands the engine an
+/// ordinary `SyncWith`. Pinned here because both halves are invisible from the
+/// happy path: the row only shows up *after* the scan, and a round that had been
+/// sent would still be `ok` if the peer were never recorded.
+///
+/// `192.0.2.7` is TEST-NET-1 (RFC 5737): reserved for documentation, so the
+/// worker thread's attempt is guaranteed to go nowhere and this test asserts
+/// about the request rather than about the network.
+#[test]
+fn a_scanned_code_admits_the_device_and_asks_for_a_round() {
+    let mut h = Harness::new("sync-qr-pull");
+    let view = h.ok(r#"{"op":"syncQrPull","id":"desk-1","name":"桌上那台","address":"192.0.2.7:5878"}"#);
+
+    let row = view["sync"]["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|r| r["id"] == Value::from("desk-1"))
+        .expect("the scanned device is on the device list");
+    assert_eq!(row["address"], Value::from("192.0.2.7:5878"));
+    assert_eq!(row["name"], Value::from("桌上那台"));
+    assert_eq!(row["online"], Value::Bool(true), "just scanned: it is right here");
+}
+
+/// **A code with no device in it is refused in the user's words, not dialled.**
+///
+/// Two ways to be here, and both must be caught before a socket is opened: a
+/// foreign QR (a shopping list, a Wi-Fi code from another app) and this device's
+/// own code, which is what a user scanning their own screen gets. Dialling
+/// either would hang on a connect timeout and blame the network.
+#[test]
+fn a_scanned_code_that_names_no_device_is_refused_before_any_socket() {
+    let mut h = Harness::new("sync-qr-refuse");
+
+    let foreign = h.err(r#"{"op":"syncQrPull","id":"","name":"","address":"192.0.2.7"}"#);
+    assert!(foreign.contains("设备 ID"), "got: {foreign}");
+
+    // This device's own id, read back out of the view it is drawn from.
+    let view = h.ok(r#"{"op":"syncState"}"#);
+    let me = view["sync"]["selfId"].as_str().expect("selfId").to_string();
+    let itself = h.err(&format!(r#"{{"op":"syncQrPull","id":"{me}","name":"本机","address":"192.0.2.7"}}"#));
+    assert!(itself.contains("本机"), "got: {itself}");
+}
+
+/// **An empty snapshot from a peer is refused, and this device's library is
+/// untouched afterwards.**
+///
+/// This is the round that emptied a phone. Two Android devices on one network,
+/// one of them installed five minutes earlier and holding nothing at all: the
+/// first round between them merged an empty remote snapshot against a full
+/// local one, and a merge reads absence as a deletion — so ten pages, sixty-two
+/// notes and nine tasks became zero, and the empty result was stored as the
+/// shadow, which turned "empty" into the two devices' new agreement and made the
+/// loss permanent.
+///
+/// The gate is about emptiness *as a whole*. A user may legitimately have zero
+/// tasks, or an empty inbox, but not every collection at once while this side
+/// holds rows — and that is the only shape worth refusing.
+#[test]
+fn an_empty_snapshot_from_a_peer_cannot_empty_this_device() {
+    let mut h = Harness::new("sync-empty-guard");
+
+    // A library worth losing.
+    h.ok(r#"{"op":"createPage","title":"Weekly Review"}"#);
+    h.ok(r#"{"op":"appendBlock","kind":"paragraph","text":""}"#);
+    let block = h.first_block();
+    h.send(&format!(r#"{{"op":"setBlockText","block":{block},"text":"别丢我"}}"#));
+    h.ok(r#"{"op":"createPage","title":"Getting Started"}"#);
+    h.ok(r#"{"op":"flush"}"#);
+
+    let before = h.view();
+    let pages_before = before["pages"].as_array().expect("pages").len();
+    assert_eq!(pages_before, 2, "the library this test protects");
+
+    // The round itself: a peer at TEST-NET-1, which cannot answer, so what is
+    // under test is what happens before the socket does — and the refusal is
+    // reported rather than panicking.
+    let refused = h.send(&format!(
+        r#"{{"op":"syncQrPull","id":"android-newphone","name":"新手机","address":"{}"}}"#,
+        "192.0.2.9:5878"
+    ));
+
+    // Whatever the round did, the library is the library it was.
+    h.reopen();
+    let after = h.view();
+    let pages_after = after["pages"].as_array().expect("pages").len();
+    assert_eq!(
+        pages_after, pages_before,
+        "an empty peer snapshot must never empty this library"
+    );
+    let titles: Vec<&str> = after["pages"]
+        .as_array()
+        .expect("pages")
+        .iter()
+        .map(|p| p["title"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        titles.contains(&"Weekly Review") && titles.contains(&"Getting Started"),
+        "both pages are still here, by name: {titles:?}"
+    );
+
+    // `view` carries the blocks of the *active* page, and the second
+    // `createPage` moved the cursor — so open the page the text was written
+    // into before reading it. The point is that the row is still reachable by
+    // the id it was given, not that it happens to be under the cursor.
+    let first = after["pages"]
+        .as_array()
+        .expect("pages")
+        .iter()
+        .find(|p| p["title"] == Value::from("Weekly Review"))
+        .expect("the page is still here")["id"]
+        .as_u64()
+        .expect("page id");
+    let reopened = h.ok(&format!(r#"{{"op":"openPage","page":{first}}}"#));
+    let texts: Vec<&str> = reopened["blocks"]
+        .as_array()
+        .expect("blocks")
+        .iter()
+        .map(|b| b["text"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        texts.iter().any(|t| t.contains("别丢我")),
+        "and so is the text inside them: {texts:?}"
+    );
+    let _ = refused;
+}
+
+/// **A peer that *does* hold rows is still merged.** The gate above must not
+/// become a sync that refuses every round: the ordinary first sync is this
+/// device being the newcomer, and refusing that would make a new phone useless
+/// rather than safe.
+#[test]
+fn a_peer_that_holds_a_library_is_not_mistaken_for_an_empty_one() {
+    let mut h = Harness::new("sync-nonempty-ok");
+
+    // Nothing wrong with an empty device: it records the peer and starts the
+    // round. What matters is that this one is *not* refused as an empty snapshot
+    // by the library side — here the library is empty too, so the gate's own
+    // precondition (local_rows > 0) cannot be what stopped it.
+    let view = h.ok(r#"{"op":"syncQrPull","id":"desk-9","name":"桌面","address":"192.0.2.11:5878"}"#);
+    let row = view["sync"]["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|r| r["id"] == Value::from("desk-9"))
+        .expect("the peer is recorded");
+    assert_eq!(row["address"], Value::from("192.0.2.11:5878"));
+
+    // And the library is still empty rather than having been written to.
+    h.reopen();
+    assert!(
+        h.view()["pages"].as_array().expect("pages").is_empty(),
+        "an empty local library and an unreachable peer change nothing"
+    );
+}

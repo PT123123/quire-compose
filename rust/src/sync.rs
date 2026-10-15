@@ -245,6 +245,39 @@ fn local_ip() -> Option<String> {
     Some(sock.local_addr().ok()?.ip().to_string())
 }
 
+/// `ip` or `ip:port` into a dialable pair, with [`SYNC_PORT`] for a code that
+/// carries no port — which is every code this shell or a desktop's ever made.
+///
+/// An `http://` prefix and any path are tolerated rather than refused: the field
+/// is typed by a phone camera and written by three shells, and a code that says
+/// `http://192.168.1.5:5878/sync` names the same device as one that says
+/// `192.168.1.5:5878`. Refusing it would be a puzzle for the user with the answer
+/// already in the string.
+fn split_address(address: &str) -> Result<(String, u16), String> {
+    let raw = address.trim();
+    let rest = raw.strip_prefix("http://").unwrap_or(raw);
+    let hostport = rest.split('/').next().unwrap_or("").trim();
+    if hostport.is_empty() {
+        return Err("二维码里没有地址 —— 请确认扫的是同步页出示的那一个".into());
+    }
+    let (host, port) = match hostport.rfind(':') {
+        Some(i) => {
+            let parsed = hostport[i + 1..]
+                .parse::<u16>()
+                .map_err(|_| format!("二维码里的端口看不懂：{address}"))?;
+            if parsed == 0 {
+                return Err(format!("二维码里的端口是 0：{address}"));
+            }
+            (&hostport[..i], parsed)
+        }
+        None => (hostport, SYNC_PORT),
+    };
+    if host.is_empty() {
+        return Err(format!("二维码里没有主机名：{address}"));
+    }
+    Ok((host.to_string(), port))
+}
+
 /// The one thing this build cannot carry. `None` is the ordinary case.
 ///
 /// Attachments only, and the reason the database half left this gate is worth
@@ -741,6 +774,64 @@ impl Session {
         self.sync_forget(peer_id)
     }
 
+    /// A round with the device a scanned 二维码 named.
+    ///
+    /// The by-hand door the page used to lack: a network that filters UDP
+    /// broadcast leaves 本网络上的设备 empty forever, and there was nothing the
+    /// user could do about it. Now they can point a camera at the other device's
+    /// code and get the same round the announcement would have produced.
+    ///
+    /// Deliberately not a second kind of round. The QR's fields become a
+    /// [PeerRecord] written into the peer book by [`sync_note_device`] — the same
+    /// call `Job::Discovered` makes — and then `Cmd::SyncWith` does the ordinary
+    /// pull-merge-push, including asking the far side who it is and refusing a
+    /// snapshot whose device id is not the one the code claimed. Everything after
+    /// this line is code a LAN round has been exercising on every device already.
+    ///
+    /// What the scan adds is the address and the admission. A device found this
+    /// way is `paired` for the same reason a heard one is (ADR-0029): there is no
+    /// code to exchange on a network the user already stands on, and a push back
+    /// from it has to be recognised as the peer we just dialled.
+    pub(crate) fn sync_qr_pull(
+        &mut self,
+        id: &str,
+        name: &str,
+        address: &str,
+    ) -> Result<(), String> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err("这个二维码里没有设备 ID —— 请扫同步页出示的那一个".into());
+        }
+        if id == self.sync_self_info().id {
+            return Err("这是本机自己的二维码".into());
+        }
+        let (ip, port) = split_address(address)?;
+
+        // The peer book first, so the inbound half of the round recognises the
+        // peer it is about to be pushed back to (see `Job::ApplyRemote`).
+        self.sync_note_device(id, name.trim(), "", &ip, port, Some(true))?;
+        let peer = self
+            .sync_peers()
+            .into_iter()
+            .find(|p| p.id == id)
+            .ok_or("没能把这台设备记到设备表里")?;
+        if peer.ip.is_empty() {
+            return Err(format!("二维码里没有可用地址：{address}"));
+        }
+
+        self.sync_ensure()?;
+        let label = if peer.name.is_empty() {
+            peer.id.clone()
+        } else {
+            peer.name.clone()
+        };
+        if let Some(s) = self.sync.as_mut() {
+            s.busy = true;
+            s.status = format!("正在通过二维码与 {label} 同步…");
+        }
+        self.sync_send(Cmd::SyncWith(peer))
+    }
+
     // ---- the pump ----
 
     /// Answer whatever the engine's threads have queued, and fire the auto-sync
@@ -993,6 +1084,41 @@ impl Session {
             remote.device.clone()
         };
 
+        // ── the empty-snapshot gate ──────────────────────────────────────────
+        //
+        // A snapshot with nothing in it is the ordinary shape of a device that
+        // was installed five minutes ago, or one whose store was reset, or one
+        // whose own round failed to build. It is **not** a statement that the
+        // user deleted everything, and a merge reads absence as a deletion — so
+        // without this the first round with a fresh phone empties the library
+        // that answered it, and the empty result is stored as the shadow, which
+        // makes "empty" the two sides' new agreement and the loss permanent.
+        //
+        // The test is deliberately about *emptiness as a whole*, not about any
+        // one collection: a user with a real library may legitimately have zero
+        // tasks, or zero notes in the inbox, but not all of them at once, and
+        // not when this side holds rows. Local emptiness is not a reason to
+        // refuse — that is the ordinary first sync, where the peer is the one
+        // with the library and this device is the newcomer.
+        let remote_rows = remote.pages.len()
+            + remote.blocks.len()
+            + remote.notes.len()
+            + remote.tasks.len()
+            + remote.lists.len();
+        let local_rows = local.pages.len()
+            + local.blocks.len()
+            + local.notes.len()
+            + local.tasks.len()
+            + local.lists.len();
+        if remote_rows == 0 && local_rows > 0 {
+            let message = format!(
+                "{peer_name} 发来的是一份空快照（本机有 {local_rows} 项）—— 已拒绝，\
+                 这一轮没有动本机的任何数据"
+            );
+            self.sync_log_push(&peer_name, false, &message).ok();
+            return Err(message);
+        }
+
         // Say so in the log the sync page already draws: the round did run and
         // did move the pages, and a table the other device shows that this one
         // never grew is otherwise a silent difference between two libraries the
@@ -1188,6 +1314,31 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("quire-sync-{tag}-{nanos}"));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
+    }
+
+    /// A scanned address, in the three shapes a code can carry. The URL forms are
+    /// the ones a hand-typed field would produce, and refusing them would be a
+    /// puzzle with the answer already in the string.
+    #[test]
+    fn a_scanned_address_splits_into_host_and_port() {
+        assert_eq!(
+            split_address("192.168.1.5:5878").unwrap(),
+            ("192.168.1.5".to_string(), 5878)
+        );
+        assert_eq!(
+            split_address("192.168.1.5").unwrap(),
+            ("192.168.1.5".to_string(), SYNC_PORT)
+        );
+        assert_eq!(
+            split_address("http://192.168.1.5:5878/sync").unwrap(),
+            ("192.168.1.5".to_string(), 5878)
+        );
+        assert!(split_address("").is_err(), "an empty code names no device");
+        assert!(
+            split_address("192.168.1.5:0").is_err(),
+            "port 0 is not an address to dial"
+        );
+        assert!(split_address("192.168.1.5:abc").is_err(), "a bad port is a typo, not a host");
     }
 
     /// The gate, which is the one thing that keeps a merge from reading absence as
