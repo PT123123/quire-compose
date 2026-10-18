@@ -144,11 +144,12 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
         // their own, without a pull or a page visit to fetch them.
         viewModelScope.launch {
             while (true) {
-                delay(TICK_MS)
-                if (foreground) {
-                    val reply = withContext(bridgeDispatcher) { bridge.tick() }
-                    (reply as? Reply.Updated)?.let(::apply)
-                }
+                delay(if (foreground) TICK_MS else BACKGROUND_SYNC_TICK_MS)
+                // The HTTP server queues snapshot work for this session. Keep
+                // draining that queue at a low rate while backgrounded, or a
+                // peer's request sits unanswered until this app is reopened.
+                val reply = withContext(bridgeDispatcher) { bridge.tick() }
+                if (foreground) (reply as? Reply.Updated)?.let(::apply)
             }
         }
     }
@@ -1044,7 +1045,9 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
      * the caller knows which of the two this is.
      */
     fun syncStart(kick: Boolean = false) = act {
-        bridge.syncTransport(Network.isOnWifi(getApplication()), kick)
+        val context = getApplication<Application>()
+        Network.bindProcessToLanWifi(context)
+        bridge.syncTransport(Network.isOnWifi(context), kick)
         bridge.syncOpen()
     }
 
@@ -1308,6 +1311,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val TICK_MS = 1_000L
+        const val BACKGROUND_SYNC_TICK_MS = 4_000L
 
         /** How long a deleted row stays recoverable before the real command goes out. */
         const val DELETE_UNDO_MS = 3_000L

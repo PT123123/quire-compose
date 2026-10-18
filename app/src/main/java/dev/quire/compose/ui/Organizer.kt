@@ -3,6 +3,7 @@ package dev.quire.compose.ui
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalOverscrollConfiguration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -68,6 +69,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -2708,7 +2710,7 @@ private fun OrgEmpty(text: String, hint: String) {
  * device with no peers, must not flash) and a ceiling over it (a round that never
  * answers must not pin the list down).
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun QuirePullRefresh(
     state: LazyListState,
@@ -2748,10 +2750,13 @@ internal fun QuirePullRefresh(
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 // Dragged back up while a pull is showing: spend it on the pull
                 // before the list sees it, so nothing jumps under the finger.
-                if (!refreshing && available.y > 0f && offset > 0f) {
-                    val taken = minOf(available.y, offset)
+                // Nested scroll deltas describe content movement, not finger
+                // movement: a finger moving back up produces a negative delta.
+                // Consume that delta to retract the pull before the list sees it.
+                if (!refreshing && available.y < 0f && offset > 0f) {
+                    val taken = minOf(-available.y, offset)
                     offset -= taken
-                    return Offset(0f, taken)
+                    return Offset(0f, -taken)
                 }
                 return Offset.Zero
             }
@@ -2830,7 +2835,12 @@ internal fun QuirePullRefresh(
         // The list rides down whole. Reading `offset` in the layout lambda keeps
         // the drag off the recomposition path — only the draw changes per frame.
         Box(modifier = Modifier.offset { IntOffset(0, offset.roundToInt()) }) {
-            content()
+            // The list is already moved by this pull gesture. Compose's default
+            // edge stretch would apply a second, independent transform at the
+            // top, producing the vibration/ghosting seen on Android.
+            CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
+                content()
+            }
         }
         // The indicator sits in the gap the list just left, centred on it. Its fade
         // and spin are driven in the draw phase for the same reason.

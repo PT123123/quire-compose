@@ -34,6 +34,10 @@ install:
 release-publish:
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-publish.ps1
 
+# Add the current release APK to the local lanpub repository.
+publish:
+    lanpub add app/build/outputs/apk/release/app-release.apk
+
 # The *other* door a release leaves by: bump the patch, build the signed APK, and
 # put it in C:\workshop\quire-compose-<version> — the user's own drop zone, one
 # folder per release. Same steps as release-publish minus GitHub, and it advances

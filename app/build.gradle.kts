@@ -122,21 +122,11 @@ android {
             // Not AGP's generated key: this app's, so `just install` and the
             // published APK replace each other instead of colliding.
             if (hasSigningIdentity) signingConfig = signingConfigs.getByName("quire")
-            // **Say `-patch` in the version a person reads.** The version name is
-            // the only thing on screen that tells a debug build from a release
-            // one — `install -r` crosses between them silently, which is how a
-            // rebuilt-but-unbumped build gets reported as the version it never
-            // was. The suffix is Android's own marker, and it is what
-            // Obtainium and every store already read as "not a release".
-            // `versionCode` is untouched, so a debug build still installs over
-            // its own previous one.
-            //
             // **No `applicationIdSuffix`**: that would make the debug build a
             // *different app* with its own data directory, so it could not be
             // installed over this one, could not see the library you are working
-            // in, and would leave two icons asking which is which. The only thing
-            // that needs distinguishing here is the version you read.
-            versionNameSuffix = "-patch"
+            // in, and would leave two icons asking which is which. Keep the
+            // visible version exactly equal to the version users were given.
         }
         release {
             isMinifyEnabled = false

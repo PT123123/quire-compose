@@ -4,6 +4,17 @@ Architecture Decision Records for the Compose shell. Format: decision →
 context → consequences. Newest first. Numbering is per repository, so these
 numbers have nothing to do with the desktop shell's or the core's.
 
+## ADR-0034 · 只有对端确认回推后才推进主动同步基线
+
+主动同步先拉取、合并并应用本地结果，再将合并快照推回对端。此前本地应用完成时就写入
+peer shadow；若对端拒绝或无法收到回推，下一轮会把这份尚未共同确认的状态当作共同基线，
+进而把对端缺失的本地行误判为删除。
+
+主动同步现在暂存合并快照，只在回推收到成功响应后提交为 shadow。失败时丢弃暂存值并保留
+旧 shadow。接收方仍在成功处理入站快照后提交 shadow，因为它已把发送方的合并快照应用到
+本地；发送方只有拿到成功响应才提交，因此响应未到达时发送方仍以旧基线合并，保留其本地
+独有内容。
+
 ## ADR-0033 · 顶栏不给撤销,浮条给；一勾也有一条浮条
 
 Three asks from a phone in the hand, and the fourth turned out to be already

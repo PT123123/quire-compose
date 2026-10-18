@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import dev.quire.compose.bridge.Network
 import dev.quire.compose.ui.QuireApp
 
 /**
@@ -22,6 +23,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // The sync engine opens its UDP and TCP sockets as the ViewModel starts.
+        // Bind first so a VPN default route cannot capture them before the
+        // physical Wi-Fi callback arrives.
+        Network.bindProcessToLanWifi(this)
         setContent { QuireApp(vm) }
     }
 

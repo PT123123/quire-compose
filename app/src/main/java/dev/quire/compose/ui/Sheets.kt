@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -33,6 +34,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -191,10 +194,10 @@ private fun ThemeSwatch(
     }
 }
 
-/** Settings: global switches, kept off the main surface on purpose. */
+/** Settings is a full destination; sync gets the same full-height surface as its own tab. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
+fun SettingsPage(view: View, vm: QuireViewModel, selectedTab: Int, onTabSelected: (Int) -> Unit) {
     val colors = LocalQuireColors.current
     // The ramp `system` currently resolves to, so its own swatch is a live
     // preview like every other one rather than a placeholder.
@@ -205,17 +208,23 @@ fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
         SwatchEntry(it.id, it.emoji + " " + it.name, it.bg, it.grad2, it.fg)
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = colors.surface,
-        contentColor = colors.textPrimary,
-    ) {
-        Column(
-            modifier = Modifier
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .padding(bottom = 16.dp),
-        ) {
+    Column(Modifier.fillMaxSize()) {
+        val tabs = listOf("外观", "笔记", "当前页面", "同步", "关于")
+        ScrollableTabRow(selectedTabIndex = selectedTab, containerColor = colors.background) {
+            tabs.forEachIndexed { index, label ->
+                Tab(selected = selectedTab == index, onClick = { onTabSelected(index) }, text = { Text(label) })
+            }
+        }
+        when (selectedTab) {
+            3 -> SyncPage(vm)
+            else -> Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+                    .padding(bottom = 16.dp),
+            ) {
+            if (selectedTab == 0) {
             SheetHeader("外观")
             // AW's twelve themes, preceded by the one id that is not a palette
             // (跟随系统). Chunked into rows of three rather than laid out with
@@ -240,8 +249,8 @@ fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
                     repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
-
-            HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
+            }
+            if (selectedTab == 1) {
             SheetHeader("笔记")
             SheetItem(
                 label = "打开笔记页时自动弹出输入框",
@@ -253,8 +262,8 @@ fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
                     Switch(checked = view.autoInput, onCheckedChange = { vm.setAutoInput(it) })
                 },
             )
-
-            HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
+            }
+            if (selectedTab == 2) {
             SheetHeader("当前页面")
             SheetItem(
                 label = "只读",
@@ -267,8 +276,8 @@ fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
                     )
                 },
             )
-
-            HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 6.dp))
+            }
+            if (selectedTab == 4) {
             SheetHeader("关于")
             // **The strings a user is asked for about the app are the ones a `Text`
             // could not give** (ADR-0031, the desktop's ADR-0135 from its side): a
@@ -305,8 +314,10 @@ fun SettingsSheet(view: View, vm: QuireViewModel, onDismiss: () -> Unit) {
                     )
                 }
             }
+            }
         }
     }
+}
 }
 
 /** Rename one page. The keyboard opens with the caret where it matters. */

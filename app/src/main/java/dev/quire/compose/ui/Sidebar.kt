@@ -21,7 +21,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -54,7 +53,7 @@ import dev.quire.compose.bridge.View
  * the same place the desktop shell keeps it.
  *
  * [activeDestination] is where the shell is standing — [DEST_NOTES],
- * [DEST_TASKS], [DEST_SYNC], or [DEST_PAGES] for the document and anything that
+ * [DEST_TASKS], or [DEST_PAGES] for the document and anything that
  * is not one of the three. It is what lights the three action rows and what
  * keeps the page tree lit only while the document is the thing on screen: a
  * drawer that highlights 收件箱's row while the user reads a page is lying
@@ -73,7 +72,6 @@ fun Sidebar(
     onNewPage: () -> Unit,
     onOpenNotes: () -> Unit,
     onOpenTasks: () -> Unit,
-    onOpenSync: () -> Unit,
     onOpenSettings: () -> Unit,
     /** Where the caret lands when the drawer opens, so typing reaches the drawer. */
     firstRowFocus: FocusRequester? = null,
@@ -116,12 +114,6 @@ fun Sidebar(
             icon = Icons.Default.CheckCircle,
             onClick = onOpenTasks,
             selected = activeDestination == DEST_TASKS,
-        )
-        SidebarAction(
-            label = "同步",
-            icon = Icons.Default.Refresh,
-            onClick = onOpenSync,
-            selected = activeDestination == DEST_SYNC,
         )
         HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 4.dp))
 

@@ -787,30 +787,16 @@ fn a_locked_page_does_not_lock_the_organizer() {
     assert_eq!(h.note()["title"], "写着呢");
 }
 
-/// **「刷新」with nothing to sync with says so, and says it in the user's words.**
-///
-/// The 刷新 icon in 收件箱 and 任务 (ADR-0029) is a round with *every* device on
-/// the network, so a library that has heard no one is the case it hits first —
-/// the icon is not even drawn then, but the request is reachable (the pull
-/// gesture is too) and must not be a panic or an empty success. The error is the
-/// half that matters: a 刷新 that reported "ok" while syncing with nobody is a
-/// round that looks like it worked.
-///
-/// The wording is the *new* one, and that is deliberate. It used to say
-/// 「还没有配对任何设备」, which is now a question with no answer — pairing is
-/// gone, so a test still asserting that string would be pinning a dead concept
-/// and would pass again if someone reintroduced the gate.
+/// Refreshing with no reachable peer ends quietly and explains why in the status.
 #[test]
-fn a_refresh_with_no_device_says_why_instead_of_pretending() {
+fn a_refresh_with_no_device_ends_quietly_with_a_status() {
     let mut h = Harness::new("sync-refresh-empty");
     // syncState first, the way the 同步 page does, so the engine is running and
     // the failure below is about the peers rather than about the engine.
     h.ok(r#"{"op":"syncState"}"#);
-    let error = h.err(r#"{"op":"syncNowAll"}"#);
-    assert!(
-        error.contains("还没有别的设备出现在这个网络上"),
-        "the press should be told what is missing, got: {error}"
-    );
+    let view = h.ok(r#"{"op":"syncNowAll"}"#);
+    assert_eq!(view["sync"]["status"], "暂时没有发现可同步的设备");
+    assert_eq!(view["sync"]["busy"], Value::Bool(false));
 }
 
 /// **`syncNowAll` is reachable from a session that never opened the 同步 page.**
@@ -828,11 +814,9 @@ fn the_refresh_op_is_spelled_the_way_the_button_sends_it() {
     let mut h = Harness::new("sync-refresh-op");
     // No syncState first: the button lives in the organizer, so this is the
     // shape it actually arrives in.
-    let error = h.err(r#"{"op":"syncNowAll"}"#);
-    assert!(
-        !error.contains("unknown op") && !error.contains("同步还没启动"),
-        "the op must be reached and the engine started for us, got: {error}"
-    );
+    let view = h.ok(r#"{"op":"syncNowAll"}"#);
+    assert_eq!(view["sync"]["running"], Value::Bool(true));
+    assert_eq!(view["sync"]["status"], "暂时没有发现可同步的设备");
     // …and the engine it started is still a working one: the 同步 page opens.
     h.ok(r#"{"op":"syncState"}"#);
 }

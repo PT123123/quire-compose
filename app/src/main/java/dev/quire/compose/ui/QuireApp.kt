@@ -120,7 +120,7 @@ private fun StartupScreen(error: String?) {
  * list and its own settings in the app this shell is ported from, and it is where
  * this device is put on the LAN.
  */
-private enum class Area { Pages, Notes, Tasks, Sync }
+private enum class Area { Pages, Notes, Tasks, Settings }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,7 +139,7 @@ private fun Shell(view: View, vm: QuireViewModel) {
     var pageMenuFor by remember { mutableStateOf<Long?>(null) }
     var renameFor by remember { mutableStateOf<Long?>(null) }
     var deleteFor by remember { mutableStateOf<Long?>(null) }
-    var settingsOpen by remember { mutableStateOf(false) }
+    var settingsTab by remember { mutableStateOf(0) }
 
     // 收件箱 is home (ADR-0015): the app opens there, and it is where 任务 and the
     // document both return to. `openNotes()` runs once so a cold launch lands on a
@@ -165,7 +165,7 @@ private fun Shell(view: View, vm: QuireViewModel) {
             area == Area.Tasks && organizerInDetail(vm) -> vm.orgSelectRow(-1)
             area == Area.Tasks -> area = Area.Notes
             area == Area.Pages -> area = Area.Notes
-            area == Area.Sync -> area = Area.Notes
+            area == Area.Settings -> area = Area.Notes
             else -> Unit
         }
     }
@@ -197,7 +197,7 @@ private fun Shell(view: View, vm: QuireViewModel) {
                     activeDestination = when (area) {
                         Area.Notes -> DEST_NOTES
                         Area.Tasks -> DEST_TASKS
-                        Area.Sync -> DEST_SYNC
+                        Area.Settings -> DEST_PAGES
                         Area.Pages -> DEST_PAGES
                     },
                     onPageMenu = { pageMenuFor = it },
@@ -225,13 +225,9 @@ private fun Shell(view: View, vm: QuireViewModel) {
                         vm.openTasks()
                         area = Area.Tasks
                     },
-                    onOpenSync = {
-                        scope.launch { drawerState.close() }
-                        area = Area.Sync
-                    },
                     onOpenSettings = {
                         scope.launch { drawerState.close() }
-                        settingsOpen = true
+                        area = Area.Settings
                     },
                     firstRowFocus = drawerFocus,
                 )
@@ -250,7 +246,7 @@ private fun Shell(view: View, vm: QuireViewModel) {
                 when (area) {
                     Area.Notes -> NotesBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
                     Area.Tasks -> TasksBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
-                    Area.Sync -> SyncBar(vm = vm, onOpenDrawer = { scope.launch { drawerState.open() } })
+                    Area.Settings -> SettingsBar(onOpenDrawer = { scope.launch { drawerState.open() } })
                     Area.Pages -> TopBar(
                         view = view,
                         onOpenDrawer = { scope.launch { drawerState.open() } },
@@ -264,7 +260,7 @@ private fun Shell(view: View, vm: QuireViewModel) {
                 when (area) {
                     Area.Notes -> NotesPage(vm = vm)
                     Area.Tasks -> TasksPage(vm = vm)
-                    Area.Sync -> SyncPage(vm = vm)
+                    Area.Settings -> SettingsPage(view = view, vm = vm, selectedTab = settingsTab, onTabSelected = { settingsTab = it })
                     Area.Pages -> EditorScreen(view = view, vm = vm, onBlockMenu = { blockMenuFor = it })
                 }
             }
@@ -360,9 +356,21 @@ private fun Shell(view: View, vm: QuireViewModel) {
         LaunchedEffect(deleteFor) { deleteFor = null }
     }
 
-    if (settingsOpen) {
-        SettingsSheet(view = view, vm = vm, onDismiss = { settingsOpen = false })
-    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsBar(onOpenDrawer: () -> Unit) {
+    val colors = LocalQuireColors.current
+    TopAppBar(
+        title = { Text("设置", color = colors.textPrimary) },
+        navigationIcon = {
+            IconButton(onClick = onOpenDrawer) {
+                Icon(Icons.Default.Menu, contentDescription = "页面列表", tint = colors.textSecondary)
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.background),
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

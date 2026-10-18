@@ -44,6 +44,7 @@
 //! between shells behaves identically.
 
 use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::net::UdpSocket;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 
@@ -98,6 +99,13 @@ const RECENT_ENOUGH_SECS: u64 = 60;
 
 fn shadow_key(peer_id: &str) -> String {
     format!("sync.shadow.{peer_id}")
+}
+
+/// `quire-core`'s shared Job uses an empty peer kind for an inbound HTTP push.
+/// Mark every worker target in-memory so QR-added peers with no device-kind
+/// metadata still take the outbound, pending-shadow path.
+fn mark_outbound(peer: &mut PeerRecord) {
+    peer.kind = "outbound-sync".to_string();
 }
 
 // ─── the wire shape the page draws ──────────────────────────────────────────
@@ -177,8 +185,21 @@ pub struct Sync {
     /// dropped at [`Session::sync_apply_remote`]'s door rather than merged.
     unsyncable: Option<String>,
     busy: bool,
+    /// Peers whose pull-merge-push command is queued or running. Keep the
+    /// whole batch busy until every peer finishes; otherwise the first timeout
+    /// lets the timer enqueue a second copy of the rest of the batch.
+    pending_syncs: HashSet<String>,
+    /// A failed automatic attempt is retried after a short cooldown. A manual
+    /// sync still goes through immediately.
+    retry_after: HashMap<String, u64>,
     last_auto: u64,
     status: String,
+    /// Presence state last sent to Compose, so beacons redraw only when a
+    /// device actually appears or disappears.
+    visible_online: HashSet<String>,
+    /// Locally merged snapshots whose pull-merge-push round has not yet been
+    /// accepted by the peer. A failed push must not become the next merge base.
+    pending_shadows: HashMap<String, SyncSnapshot>,
 }
 
 impl Sync {
@@ -202,8 +223,12 @@ impl Sync {
                 jobs: rx,
                 unsyncable: gate,
                 busy: false,
+                pending_syncs: HashSet::new(),
+                retry_after: HashMap::new(),
                 last_auto: 0,
                 status: String::new(),
+                visible_online: HashSet::new(),
+                pending_shadows: HashMap::new(),
             };
         }
         let (job_tx, jobs) = channel();
@@ -213,8 +238,12 @@ impl Sync {
             jobs,
             unsyncable: None,
             busy: false,
+            pending_syncs: HashSet::new(),
+            retry_after: HashMap::new(),
             last_auto: 0,
             status: "已启动".to_string(),
+            visible_online: HashSet::new(),
+            pending_shadows: HashMap::new(),
         }
     }
 
@@ -376,7 +405,11 @@ impl Session {
             self.put_sync_setting(KEY_DEVICE_ID, &info.id)?;
         }
         if self.settings.get(KEY_DEVICE_NAME) != Some(info.name.as_str())
-            && self.settings.get(KEY_DEVICE_NAME).map(|v| v.is_empty()).unwrap_or(true)
+            && self
+                .settings
+                .get(KEY_DEVICE_NAME)
+                .map(|v| v.is_empty())
+                .unwrap_or(true)
         {
             self.put_sync_setting(KEY_DEVICE_NAME, &info.name)?;
         }
@@ -503,7 +536,10 @@ impl Session {
     }
 
     pub(crate) fn sync_auto(&self) -> bool {
-        self.settings.get(KEY_AUTO).map(|v| v == "1").unwrap_or(true)
+        self.settings
+            .get(KEY_AUTO)
+            .map(|v| v == "1")
+            .unwrap_or(true)
     }
 
     pub(crate) fn sync_interval(&self) -> u64 {
@@ -666,19 +702,37 @@ impl Session {
     // ---- the commands the page sends ----
 
     fn sync_send(&mut self, cmd: Cmd) -> Result<(), String> {
-        let sync = self.sync.as_ref().ok_or("同步还没启动")?;
-        sync.cmds.send(cmd).map_err(|_| "同步引擎已经不在了".to_string())
+        let peer_id = match &cmd {
+            Cmd::SyncWith(peer) => Some(peer.id.clone()),
+            Cmd::PairWith(_) => None,
+        };
+        let cmds = {
+            let sync = self.sync.as_ref().ok_or("同步还没启动")?;
+            if let Some(id) = &peer_id {
+                if sync.pending_syncs.contains(id) {
+                    return Ok(());
+                }
+            }
+            sync.cmds.clone()
+        };
+        cmds.send(cmd)
+            .map_err(|_| "同步引擎已经不在了".to_string())?;
+        if let (Some(id), Some(sync)) = (peer_id, self.sync.as_mut()) {
+            sync.pending_syncs.insert(id);
+            sync.busy = true;
+        }
+        Ok(())
     }
 
     pub(crate) fn sync_now(&mut self, peer_id: &str) -> Result<(), String> {
         // Any heard device (ADR-0029): the row exists because it announced, so
         // there is nothing left to ask before dialling it.
-        let peer = self
+        let mut peer = self
             .sync_peers()
             .into_iter()
             .find(|p| p.id == peer_id)
             .ok_or_else(|| format!("没有这个设备: {peer_id}"))?;
-        self.sync.as_mut().map(|s| s.busy = true);
+        mark_outbound(&mut peer);
         self.sync_send(Cmd::SyncWith(peer))
     }
 
@@ -703,9 +757,9 @@ impl Session {
     /// asking again whether it is trusted asks the same question twice.
     ///
     /// Returns the targets and, separately, the peers that were left out by
-    /// name. The timer drops those silently: nobody is waiting on a tick. The
-    /// button cannot — the press asked for *this* round, and a round that
-    /// quietly skipped a device is the one that looks like it worked.
+    /// name. Offline entries are normal in a persisted peer book: the timer
+    /// drops them silently, and a manual pull should do the same rather than
+    /// turning every absent device into a page-wide error.
     pub(crate) fn peers_due_for_a_round(&self) -> (Vec<PeerRecord>, Vec<String>) {
         let now = quire_core::services::sync::engine::now_unix();
         let me = self.sync_self_info().id;
@@ -718,7 +772,11 @@ impl Session {
             if reachable {
                 targets.push(peer);
             } else {
-                absent.push(if peer.name.is_empty() { peer.id } else { peer.name });
+                absent.push(if peer.name.is_empty() {
+                    peer.id
+                } else {
+                    peer.name
+                });
             }
         }
         (targets, absent)
@@ -726,33 +784,29 @@ impl Session {
 
     pub(crate) fn sync_now_all(&mut self) -> Result<(), String> {
         self.sync_ensure()?;
-        let (targets, absent) = self.peers_due_for_a_round();
+        let (targets, _absent) = self.peers_due_for_a_round();
         if targets.is_empty() {
-            return Err(if absent.is_empty() {
-                "还没有别的设备出现在这个网络上 — 打开另一台设备就会自动同步。"
-                    .to_string()
-            } else {
-                format!("{} 不在本网络上 — 它重新广播后就会自动同步。", absent.join("、"))
-            });
+            if let Some(sync) = self.sync.as_mut() {
+                sync.status = "暂时没有发现可同步的设备".to_string();
+            }
+            return Ok(());
         }
-        self.sync.as_mut().map(|s| s.busy = true);
         let names: Vec<String> = targets
             .iter()
-            .map(|p| if p.name.is_empty() { p.id.clone() } else { p.name.clone() })
+            .map(|p| {
+                if p.name.is_empty() {
+                    p.id.clone()
+                } else {
+                    p.name.clone()
+                }
+            })
             .collect();
-        for p in targets {
+        for mut p in targets {
+            mark_outbound(&mut p);
             self.sync_send(Cmd::SyncWith(p))?;
         }
         if let Some(s) = self.sync.as_mut() {
-            s.status = if absent.is_empty() {
-                format!("正在与 {} 同步…", names.join("、"))
-            } else {
-                format!(
-                    "正在与 {} 同步…（{} 不在本网络上，已跳过）",
-                    names.join("、"),
-                    absent.join("、")
-                )
-            };
+            s.status = format!("正在与 {} 同步…", names.join("、"));
         }
         Ok(())
     }
@@ -810,11 +864,13 @@ impl Session {
         // The peer book first, so the inbound half of the round recognises the
         // peer it is about to be pushed back to (see `Job::ApplyRemote`).
         self.sync_note_device(id, name.trim(), "", &ip, port, Some(true))?;
-        let peer = self
+        let mut peer = self
             .sync_peers()
             .into_iter()
             .find(|p| p.id == id)
             .ok_or("没能把这台设备记到设备表里")?;
+        // A QR pairing may have no device-kind metadata yet.
+        mark_outbound(&mut peer);
         if peer.ip.is_empty() {
             return Err(format!("二维码里没有可用地址：{address}"));
         }
@@ -826,7 +882,6 @@ impl Session {
             peer.name.clone()
         };
         if let Some(s) = self.sync.as_mut() {
-            s.busy = true;
             s.status = format!("正在通过二维码与 {label} 同步…");
         }
         self.sync_send(Cmd::SyncWith(peer))
@@ -856,7 +911,11 @@ impl Session {
             }
         }
 
-        let mut changed = !jobs.is_empty();
+        // Discovery sends a beacon every four seconds. It refreshes `last_seen`
+        // for routing decisions, but an unchanged sighting is not a UI change;
+        // treating every queued job as a full view used to redraw the whole
+        // workspace on every beacon.
+        let mut changed = false;
         for job in jobs {
             match job {
                 Job::ExportSnapshot { reply } => {
@@ -869,6 +928,7 @@ impl Session {
                             // pull fails instead of being handed a snapshot that
                             // would read as "this device deleted everything".
                             self.sync_log_push("", false, &e).ok();
+                            changed = true;
                         }
                     }
                 }
@@ -911,10 +971,27 @@ impl Session {
                         let _ = reply.send(Err(message));
                         continue;
                     }
+                    let before = self.sync_export().ok();
                     let result = self.sync_apply_remote(&snapshot, &peer);
+                    // A peer sends its whole snapshot every round. Only a row
+                    // change (or a newly logged refusal) needs a full workspace
+                    // view; a no-op merge must not make the note list jump.
+                    changed |= match (&before, &result) {
+                        (Some(before), Ok(after)) => !same_snapshot_rows(before, after),
+                        (_, Err(_)) | (None, Ok(_)) => true,
+                    };
                     if let Ok(merged) = &result {
-                        self.sync_store_shadow(&peer.id, merged).ok();
-                        self.sync_note_synced(&peer.id, true).ok();
+                        if inbound_push {
+                            // The other side only commits its own shadow after
+                            // receiving this successful HTTP response. The inbound
+                            // merge is already applied, so retain the same base.
+                            self.sync_store_shadow(&peer.id, merged).ok();
+                            self.sync_note_synced(&peer.id, true).ok();
+                        } else if let Some(sync) = self.sync.as_mut() {
+                            // The worker still has to push this result back. Keep
+                            // the prior shadow until that POST receives HTTP 200.
+                            sync.pending_shadows.insert(peer.id.clone(), merged.clone());
+                        }
                     }
                     let _ = reply.send(result);
                 }
@@ -938,6 +1015,20 @@ impl Session {
                     // Hearing a device is the whole of admitting it (ADR-0029) —
                     // the same call the desktop's pump makes, so a device syncs
                     // with one shell or the other, never with only one of them.
+                    let now = quire_core::services::sync::engine::now_unix();
+                    let was_recent = self
+                        .sync_peers()
+                        .into_iter()
+                        .find(|p| p.id == device.id)
+                        .map(|p| {
+                            p.last_seen > 0
+                                && now.saturating_sub(p.last_seen) < RECENT_ENOUGH_SECS
+                                && (p.name == device.name || device.name.is_empty())
+                                && (p.kind == device.kind || device.kind.is_empty())
+                                && (p.ip == ip || ip.is_empty())
+                                && (p.port == device.port || device.port == 0)
+                        })
+                        .unwrap_or(false);
                     self.sync_note_device(
                         &device.id,
                         &device.name,
@@ -947,6 +1038,9 @@ impl Session {
                         Some(true),
                     )
                     .ok();
+                    if !was_recent {
+                        changed = true;
+                    }
                 }
                 Job::Paired { device, ip } => {
                     self.sync_note_device(
@@ -961,9 +1055,31 @@ impl Session {
                     self.sync_log_push(&device.name, true, "已加入").ok();
                     changed = true;
                 }
-                Job::SyncDone { peer_id, ok, message } => {
+                Job::SyncDone {
+                    peer_id,
+                    ok,
+                    message,
+                } => {
+                    let pending = self
+                        .sync
+                        .as_mut()
+                        .and_then(|sync| sync.pending_shadows.remove(&peer_id));
+                    if ok {
+                        if let Some(merged) = pending {
+                            self.sync_store_shadow(&peer_id, &merged).ok();
+                        }
+                    }
                     if let Some(s) = self.sync.as_mut() {
-                        s.busy = false;
+                        s.pending_syncs.remove(&peer_id);
+                        s.busy = !s.pending_syncs.is_empty();
+                        if ok {
+                            s.retry_after.remove(&peer_id);
+                        } else {
+                            s.retry_after.insert(
+                                peer_id.clone(),
+                                quire_core::services::sync::engine::now_unix() + 60,
+                            );
+                        }
                         s.status = if ok {
                             message.clone()
                         } else {
@@ -972,7 +1088,10 @@ impl Session {
                     }
                     self.sync_note_synced(&peer_id, ok).ok();
                     self.sync_log_push(&peer_id, ok, &message).ok();
-                    changed = true;
+                    // Success bookkeeping is visible next time the sync page is
+                    // opened. Redrawing the workspace on every no-op success is
+                    // what made two idle phones look like they refreshed forever.
+                    changed |= !ok;
                 }
                 // The engine's own clock. This shell's interval lives in a
                 // setting the user chose, so the timer is run below instead.
@@ -990,8 +1109,7 @@ impl Session {
         let write_due = dirty > 0 && now.saturating_sub(dirty) >= WRITE_KICK_SECS;
         let due = match self.sync.as_ref() {
             Some(s) => {
-                auto
-                    && !s.busy
+                auto && !s.busy
                     && s.running()
                     && (now.saturating_sub(s.last_auto) >= interval || write_due)
             }
@@ -1003,13 +1121,39 @@ impl Session {
             }
             self.dirty_at.set(0);
             let (peers, _absent) = self.peers_due_for_a_round();
+            let retry_after = self
+                .sync
+                .as_ref()
+                .map(|s| s.retry_after.clone())
+                .unwrap_or_default();
+            let peers: Vec<_> = peers
+                .into_iter()
+                .filter(|p| retry_after.get(&p.id).map_or(true, |until| now >= *until))
+                .collect();
             if !peers.is_empty() {
-                if let Some(s) = self.sync.as_mut() {
-                    s.busy = true;
-                }
-                for p in peers {
+                for mut p in peers {
+                    mark_outbound(&mut p);
                     self.sync_send(Cmd::SyncWith(p)).ok();
                 }
+            }
+        }
+
+        let now = quire_core::services::sync::engine::now_unix();
+        let me = self.sync_self_info().id;
+        let online: HashSet<String> = self
+            .sync_peers()
+            .into_iter()
+            .filter(|p| {
+                p.id != me
+                    && p.last_seen > 0
+                    && now.saturating_sub(p.last_seen) < RECENT_ENOUGH_SECS
+            })
+            .map(|p| p.id)
+            .collect();
+        if let Some(sync) = self.sync.as_mut() {
+            if sync.visible_online != online {
+                sync.visible_online = online;
+                changed = true;
             }
         }
         changed
@@ -1199,7 +1343,8 @@ impl Session {
         // device shows, and nothing said why. They go into the log the page already
         // draws, which is this shell's version of the reference app's 冲突 list.
         for conflict in &outcome.conflicts {
-            self.sync_log_push(&peer_name, true, &format!("冲突：{conflict}")).ok();
+            self.sync_log_push(&peer_name, true, &format!("冲突：{conflict}"))
+                .ok();
         }
 
         // The document half, as one `PersistedState`. `meta` and `settings` are
@@ -1245,6 +1390,29 @@ impl Session {
 /// A row-level diff rather than a replace, because the organizer has no bulk
 /// path: adds, updates and deletes against the catalog the session holds. Lists
 /// go last so a task that moved out of a deleted list is written first.
+/// Compare the workspace rows independent of catalog iteration order. The
+/// bridge only needs a full view when this predicate says the merge changed
+/// something the user can see.
+fn same_snapshot_rows(left: &SyncSnapshot, right: &SyncSnapshot) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.pages.sort_by_key(|row| row.id);
+    right.pages.sort_by_key(|row| row.id);
+    left.blocks.sort_by_key(|row| row.id);
+    right.blocks.sort_by_key(|row| row.id);
+    left.attachments.sort_by_key(|row| row.id);
+    right.attachments.sort_by_key(|row| row.id);
+    left.databases.sort_by_key(|row| row.id);
+    right.databases.sort_by_key(|row| row.id);
+    left.notes.sort_by_key(|row| row.id);
+    right.notes.sort_by_key(|row| row.id);
+    left.tasks.sort_by_key(|row| row.id);
+    right.tasks.sort_by_key(|row| row.id);
+    left.lists.sort_by_key(|row| row.id);
+    right.lists.sort_by_key(|row| row.id);
+    left == right
+}
+
 fn organizer_changes(local: &OrganizerCatalog, merged: &SyncSnapshot) -> Vec<Change> {
     let mut out = Vec::new();
 
@@ -1300,8 +1468,8 @@ fn organizer_changes(local: &OrganizerCatalog, merged: &SyncSnapshot) -> Vec<Cha
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quire_core::services::sync::model::SDatabase;
     use quire_core::core::{Attachment, AttachmentId};
+    use quire_core::services::sync::model::SDatabase;
 
     /// A fresh library in its own directory. No `testing` helper here: the core's
     /// scratch type is behind its own feature, and a temp directory is enough for
@@ -1314,6 +1482,33 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("quire-sync-{tag}-{nanos}"));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
+    }
+
+    #[test]
+    fn no_op_sync_comparison_ignores_catalog_order_but_detects_row_edits() {
+        let page = |id, title: &str| SPage {
+            id,
+            title: title.into(),
+            parent: None,
+            ord: id,
+            favorite: false,
+            expanded: true,
+            font: String::new(),
+            full_width: false,
+            small_text: false,
+            icon: String::new(),
+            cover: None,
+            locked: false,
+            template: false,
+        };
+        let mut left = SyncSnapshot::default();
+        left.pages = vec![page(1, "one"), page(2, "two")];
+        let mut right = SyncSnapshot::default();
+        right.pages = vec![page(2, "two"), page(1, "one")];
+        assert!(same_snapshot_rows(&left, &right));
+
+        right.pages[1].title = "changed".into();
+        assert!(!same_snapshot_rows(&left, &right));
     }
 
     /// A scanned address, in the three shapes a code can carry. The URL forms are
@@ -1338,7 +1533,10 @@ mod tests {
             split_address("192.168.1.5:0").is_err(),
             "port 0 is not an address to dial"
         );
-        assert!(split_address("192.168.1.5:abc").is_err(), "a bad port is a typo, not a host");
+        assert!(
+            split_address("192.168.1.5:abc").is_err(),
+            "a bad port is a typo, not a host"
+        );
     }
 
     /// The gate, which is the one thing that keeps a merge from reading absence as
@@ -1419,15 +1617,36 @@ mod tests {
 
         // The row the announcement produces.
         session
-            .sync_note_device("dev-heard", "Tablet", "android", "192.168.1.8", 5878, Some(true))
+            .sync_note_device(
+                "dev-heard",
+                "Tablet",
+                "android",
+                "192.168.1.8",
+                5878,
+                Some(true),
+            )
             .expect("record the heard device");
         // A row from a peer book an older build wrote: heard, but never paired.
         session
-            .sync_note_device("dev-stale", "Phone", "android", "192.168.1.9", 5878, Some(false))
+            .sync_note_device(
+                "dev-stale",
+                "Phone",
+                "android",
+                "192.168.1.9",
+                5878,
+                Some(false),
+            )
             .expect("record the stale row");
         // …and one that has left the building.
         session
-            .sync_note_device("dev-gone", "Laptop", "windows", "192.168.1.7", 5878, Some(true))
+            .sync_note_device(
+                "dev-gone",
+                "Laptop",
+                "windows",
+                "192.168.1.7",
+                5878,
+                Some(true),
+            )
             .expect("record the departed device");
         let mut peers = session.sync_peers();
         for p in peers.iter_mut() {
@@ -1451,7 +1670,11 @@ mod tests {
             !ids.contains(&"dev-gone"),
             "a device that stopped announcing is not dialled — that is the timeout: {ids:?}"
         );
-        assert_eq!(absent, vec!["Laptop".to_string()], "and it is named: {absent:?}");
+        assert_eq!(
+            absent,
+            vec!["Laptop".to_string()],
+            "and it is named: {absent:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1685,7 +1908,13 @@ mod tests {
             last_sync: String::new(),
         };
         let merged = session.sync_apply_remote(&remote, &peer).expect("apply");
-        let body = merged.notes.iter().find(|n| n.id == id).expect("the note").body.clone();
+        let body = merged
+            .notes
+            .iter()
+            .find(|n| n.id == id)
+            .expect("the note")
+            .body
+            .clone();
         assert_eq!(body, "本机改的", "the local edit is the one that keeps");
 
         let logged: Vec<String> = session
@@ -1695,7 +1924,10 @@ mod tests {
             .map(|l| l.message)
             .collect();
         assert_eq!(logged.len(), 1, "one conflict, one line: {logged:?}");
-        assert!(logged[0].contains("note"), "and it names the row: {logged:?}");
+        assert!(
+            logged[0].contains("note"),
+            "and it names the row: {logged:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
