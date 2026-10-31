@@ -967,7 +967,7 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
 
     fun orgTaskTags(task: Long, tags: String) = act { bridge.orgTaskTags(task, tags) }
 
-    /** The row menu's 移到, and the board's cross-column drop. */
+    /** The row menu's 移动到, the detail page's 清单 chips, and the board's cross-column drop. */
     fun orgMoveTask(task: Long, list: Long) = act { bridge.orgTaskList(task, list) }
 
     /** The task half of the same deferred delete; see [orgDeleteNote]. */

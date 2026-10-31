@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -267,19 +268,17 @@ fun NoteDetailPage(row: OrgModel.NoteRow, catalog: OrgCatalog, vm: QuireViewMode
             ParentPreviewRow(ref = ref, preview = preview, onOpen = { vm.orgSelectNote(it) })
         }
 
-        // The body is the note, and it commits on the same 300 ms settle the
-        // task form's fields use — with its tags, so one edit is one 撤销
-        // (ADR-0014).
-        OrgTextField(
-            rowKey = "note-body-${row.id}",
-            value = row.content,
-            placeholder = "写点什么…  使用 #标签 标记",
-            multiline = true,
-            minHeight = 160.dp,
-            textStyle = QuireType.body,
-            onCommit = { vm.orgNoteContent(row.id, it) },
-            modifier = Modifier.fillMaxWidth(),
-        )
+        // This is a reading page: editing here makes an accidental tap mutate
+        // the note. Keep the body selectable for copying without exposing an
+        // editor or committing changes from this screen.
+        SelectionContainer {
+            Text(
+                text = row.content.ifEmpty { "（空白笔记）" },
+                style = QuireType.body,
+                color = colors.textPrimary,
+                modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
+            )
+        }
 
         if (row.tags.isNotEmpty()) {
             Text(

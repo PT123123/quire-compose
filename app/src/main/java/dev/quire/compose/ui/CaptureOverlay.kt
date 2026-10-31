@@ -314,7 +314,11 @@ private fun ToolKey(
 private fun tagSuggestions(field: TextFieldValue, catalog: OrgCatalog): List<String> {
     val text = field.text
     val caret = field.selection.start.coerceIn(0, text.length)
-    val hash = text.lastIndexOf('#', (caret - 1).coerceAtLeast(0))
+    // The caret at offset 0 is before the first character, not inside a leading
+    // #tag. Clamping the search index to 0 found that # and made substring(1, 0)
+    // throw while the user moved the cursor to the start of the draft.
+    if (caret == 0) return emptyList()
+    val hash = text.lastIndexOf('#', caret - 1)
     if (hash < 0) return emptyList()
     val typed = text.substring(hash + 1, caret)
     if (typed.contains(' ') || typed.contains('#') || typed.contains('\n')) return emptyList()

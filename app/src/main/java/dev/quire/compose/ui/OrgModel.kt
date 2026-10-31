@@ -563,6 +563,25 @@ object OrgModel {
     }
 
     /**
+     * The destinations a move could pick: the inbox first, then the stored lists in
+     * their own order — the chip row **without a lit chip**, because a picker is not
+     * choosing a view to look at, it is choosing a home for one task. Which one is
+     * the current home is the *task's* fact, not the page's (see `OrgMoveSheet`).
+     */
+    fun moveTargets(catalog: OrgCatalog): List<ListChip> =
+        listChips(catalog, ORG_VIEW_INBOX, -1).map { it.copy(selected = false) }
+
+    /**
+     * Is this chip **where the task is now**?
+     *
+     * The row's own rule (see [taskRow]): a task whose list is gone reads as the
+     * inbox's, so the inbox's chip is the task's home in that case too — and the
+     * picker's check lands on the line the row itself reads.
+     */
+    fun isHome(catalog: OrgCatalog, row: TaskRow, chip: ListChip): Boolean =
+        if (chip.smart) catalog.lists.none { it.id == row.list } else row.list == chip.id
+
+    /**
      * The five numbers the smart chips carry, in their own slot order — so the row
      * that says 今天 and the list that *is* 今天 cannot disagree. Open tasks for the
      * four views a task can be open in, and the finished ones for 已完成, which is

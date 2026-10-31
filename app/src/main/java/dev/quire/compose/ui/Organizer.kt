@@ -797,6 +797,10 @@ fun TasksPage(vm: QuireViewModel) {
     val dates = remember(catalog) { OrgModel.Dates.now() }
     // The task half of the 撤销 window's filter; see [NotesPage].
     val hidden = vm.pendingDelete?.takeIf { it.isTask }?.ids ?: emptySet()
+    // The task whose 移动到 picker is open. It lives here rather than in the
+    // view model because it is a *panel's* state — the row it belongs to is the
+    // ⋯ menu's, and that menu has already closed by the time the picker is up.
+    var moveFor by remember { mutableStateOf<Long?>(null) }
 
     if (organizerInDetail(vm)) {
         val row = OrgModel.taskDetail(catalog, vm.orgTaskSel, dates)
@@ -953,7 +957,19 @@ fun TasksPage(vm: QuireViewModel) {
             row = OrgModel.taskRow(catalog, menuRow, dates, selected = false),
             catalog = catalog,
             onDismiss = vm::closeTaskMenu,
+            // The 移动到 door's second level. The menu sheet is already closing by
+            // the time this runs, so the picker stands alone — see [OrgMoveSheet].
+            onMove = { moveFor = menuRow.id },
             vm = vm,
+        )
+    }
+    val moveRow = moveFor?.let { id -> catalog.tasks.firstOrNull { it.id == id } }
+    if (moveRow != null) {
+        OrgMoveSheet(
+            row = OrgModel.taskRow(catalog, moveRow, dates, selected = false),
+            catalog = catalog,
+            onPick = { list -> vm.orgMoveTask(moveRow.id, list) },
+            onDismiss = { moveFor = null },
         )
     }
 }
@@ -1834,6 +1850,7 @@ private fun OrgTaskMenuSheet(
     row: OrgModel.TaskRow,
     catalog: OrgCatalog,
     onDismiss: () -> Unit,
+    onMove: () -> Unit,
     vm: QuireViewModel,
 ) {
     val colors = LocalQuireColors.current
@@ -1866,13 +1883,16 @@ private fun OrgTaskMenuSheet(
             OrgSheetItem(if (row.done) "标记为未完成" else "标记为已完成") {
                 vm.orgToggleTaskDone(row.id, !row.done)
             }
-            // Only the lists it could actually go to: a move to the list it is
-            // already in would be a row that does nothing.
-            for (chip in OrgModel.listChips(catalog, vm.orgView, vm.orgList)) {
-                if (chip.id == row.list) continue
-                OrgSheetItem(if (chip.smart) "移到收集箱" else "移到「${chip.name}」") {
-                    vm.orgMoveTask(row.id, chip.id)
-                }
+            // The destinations live one level down, behind one line. They used to
+            // be one 移到「xx」 line per list, so a library with a dozen lists
+            // pushed 复制 and 删除任务 off the bottom of the sheet, and every new
+            // list added a line to a menu that is about a *task*. The menu keeps
+            // its verbs; the picker (see [OrgMoveSheet]) keeps the choices.
+            // The ellipsis is the app's own mark for a door that opens another
+            // door — the 指令 door in [OrgTasksMenuSheet] is written the same way.
+            OrgSheetItem("移动到…") {
+                onDismiss()
+                onMove()
             }
             OrgSheetItem("复制") {
                 // A title, its 备注, then the 唯一 ID — one task's worth of what the
@@ -1885,6 +1905,58 @@ private fun OrgTaskMenuSheet(
                 onDismiss()
                 vm.orgDeleteTask(row.id)
             }
+            }
+        }
+    }
+}
+
+/**
+ * The task's 移动到: the destinations, one per row.
+ *
+ * The second level of the ⋯ menu's 移动到 door, and the shape the 指令 door has
+ * too (see [OrgTasksMenuSheet]): the first sheet closes, this one opens in its
+ * place. Two sheets at once would stack a scrim over a scrim for no gain — the
+ * choices are the whole content of this panel.
+ *
+ * The list the task is **already in** is shown, with the check the app draws for a
+ * selected option. A picker that hid the current home would say nothing about
+ * where the task is now; this one answers 「where is it」 and 「where can it go」 in
+ * the same list. Tapping it is a row that does nothing, which is why the check is
+ * worth having: the line says 「you are here」 before anyone taps it.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OrgMoveSheet(
+    row: OrgModel.TaskRow,
+    catalog: OrgCatalog,
+    onPick: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalQuireColors.current
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        contentColor = colors.textPrimary,
+    ) {
+        Column(
+            modifier = Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 12.dp),
+        ) {
+            OrgSheetHeader("移动到")
+            for (chip in OrgModel.moveTargets(catalog)) {
+                // Where the task is now — the row's own rule, so a task whose list
+                // is gone is checked on the inbox's line (see `OrgModel.isHome`).
+                val here = OrgModel.isHome(catalog, row, chip)
+                OrgSheetItem(
+                    label = chip.name,
+                    selected = here,
+                    colorSlot = if (chip.smart) null else chip.color,
+                ) {
+                    // The list it is already in is there to say where the task is,
+                    // not to move it there: a move to where it already is is a
+                    // write that changes nothing.
+                    if (!here) onPick(chip.id)
+                    onDismiss()
+                }
             }
         }
     }
@@ -1985,7 +2057,14 @@ internal fun OrgSheetHeader(label: String) {
 }
 
 @Composable
-internal fun OrgSheetItem(label: String, selected: Boolean = false, danger: Boolean = false, onClick: () -> Unit) {
+internal fun OrgSheetItem(
+    label: String,
+    selected: Boolean = false,
+    danger: Boolean = false,
+    /** `>= 1` draws the list's palette dot before the label; `null` for none. */
+    colorSlot: Int? = null,
+    onClick: () -> Unit,
+) {
     val colors = LocalQuireColors.current
     Row(
         modifier = Modifier
@@ -1995,7 +2074,18 @@ internal fun OrgSheetItem(label: String, selected: Boolean = false, danger: Bool
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        // The same dot the chip row draws, so a list in a sheet is the same list as
+        // a list in a chip — the colour is the list's identity, not the row's.
+        if (colorSlot != null && colorSlot > 0) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(blockTextColor(colorSlot, colors.isDark)),
+            )
+        }
         Text(
             text = label,
             style = QuireType.ui,
@@ -2795,7 +2885,14 @@ internal fun QuirePullRefresh(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (refreshing) return Velocity.Zero
+                // Nothing pulled — an ordinary flick anywhere in the list. Return
+                // at once and hand the velocity through untouched: the child
+                // suspends inside this very call before its own fling starts, so
+                // *any* work here is a dead pause the finger just paid for. And a
+                // pause it would be: `animate` has no "already there" fast path —
+                // `animate(0f, 0f, tween(200))` still runs its whole 200ms before
+                // returning, which is exactly the 顿一下 before every fast fling.
+                if (offset <= 0f || refreshing) return Velocity.Zero
                 if (offset < thresholdPx) {
                     // Short pull: it was not a refresh, let the list go back.
                     animate(offset, 0f, animationSpec = tween(200)) { value, _ -> offset = value }

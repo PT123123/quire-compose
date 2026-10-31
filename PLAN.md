@@ -212,6 +212,33 @@ gap every UI slice in this shell carries); and the twelve palettes' callout /
 mention tints are legible by construction (`lerp` against the theme's own `bg`),
 not by measurement — this shell has no contrast probe.
 
+## M2.99 · 任务的「移动到」收成一扇门 — ✅
+
+The task's ⋯ menu used to carry one 移到「xx」 line per list (ADR-0035).
+
+- [x] The menu keeps 详情 / 标记为完成 / **移动到…** / 复制 / 删除任务; the
+      destinations live one level down, so the menu's length no longer follows the
+      library's list count — a new list no longer adds a line to everyone's menu
+- [x] `OrgMoveSheet` — a second **panel**, not a second sheet stacked on the first:
+      the menu closes and the picker opens in its place, the same two steps the
+      指令 door takes
+- [x] The list the task is already in is **shown with a check**, not skipped:
+      「where is it」 and 「where can it go」 are one list, and a move to where it
+      already is is a write that changes nothing
+- [x] `OrgModel.moveTargets` — the chip row without a lit chip (a picker chooses a
+      *home*, not a view), and `OrgModel.isHome` — the row's own "a task whose list
+      is gone reads as the inbox's" rule, so the check lands where the row lands
+- [x] `OrgSheetItem` grew a `colorSlot`, so a list in the picker carries the same
+      colour dot as a list in a chip
+- [x] `OrgModelTest` +2 (the destinations and their order; the home the check
+      lands on)
+
+**Verified**: `:app:testDebugUnitTest` green (42 assertions in `OrgModelTest`, incl.
+the two new ones) and `:app:assembleDebug` green.
+
+**Not verified (honest)**: the two panels' hand-off on a real device (no emulator
+here — the same gap every UI slice in this shell carries).
+
 ## Next (not started)
 
 Slices in the order they are worth doing, each one a vertical cut the way M1 and

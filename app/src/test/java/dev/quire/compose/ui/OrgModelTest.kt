@@ -514,6 +514,47 @@ class OrgModelTest {
     }
 
     @Test
+    fun the_move_targets_are_the_chip_row_without_a_lit_chip() {
+        val catalog = OrgCatalog.Empty.copy(lists = oneList, tasks = listOf(task(1), task(2, list = 5)))
+        val targets = OrgModel.moveTargets(catalog)
+        // The inbox first, then the stored lists in their own order — the same
+        // order the chip row has, because it is the same set of places a task can
+        // be.
+        assertEquals(listOf("收集箱", "工作"), targets.map { it.name })
+        assertTrue(targets[0].smart)
+        assertEquals(-1L, targets[0].id)
+        assertEquals(5L, targets[1].id)
+        // Nothing is lit: a picker is choosing a *home* for one task, and which
+        // home that is, is the task's fact — not the page's.
+        assertTrue(targets.none { it.selected })
+    }
+
+    @Test
+    fun the_move_picker_checks_the_home_the_row_reads() {
+        val catalog = OrgCatalog.Empty.copy(lists = oneList, tasks = listOf(task(1), task(2, list = 5)))
+        val inbox = OrgModel.moveTargets(catalog)[0]
+        val stored = OrgModel.moveTargets(catalog)[1]
+
+        // A task in the inbox: the inbox's chip is its home, and no other.
+        val inInbox = OrgModel.taskRow(catalog, catalog.tasks[0], dates, false)
+        assertTrue(OrgModel.isHome(catalog, inInbox, inbox))
+        assertFalse(OrgModel.isHome(catalog, inInbox, stored))
+
+        // A task filed under a stored list: that one is.
+        val filed = OrgModel.taskRow(catalog, catalog.tasks[1], dates, false)
+        assertFalse(OrgModel.isHome(catalog, filed, inbox))
+        assertTrue(OrgModel.isHome(catalog, filed, stored))
+
+        // A task whose list is gone reads as the inbox's — the row's own rule, so
+        // the check lands on the line the row lands on.
+        val dangling = OrgCatalog.Empty.copy(lists = oneList, tasks = listOf(task(3, list = 99)))
+        val lost = OrgModel.taskRow(dangling, dangling.tasks[0], dates, false)
+        assertEquals("收集箱", lost.listName)
+        assertTrue(OrgModel.isHome(dangling, lost, inbox))
+        assertFalse(OrgModel.isHome(dangling, lost, stored))
+    }
+
+    @Test
     fun the_header_names_the_half_of_the_selector_that_is_showing() {
         val catalog = OrgCatalog.Empty.copy(lists = oneList, tasks = listOf(task(1), task(2, list = 5)))
         // The chip decides: the view's own word.
