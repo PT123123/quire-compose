@@ -714,6 +714,7 @@ impl Session {
     fn sync_send(&mut self, cmd: Cmd) -> Result<(), String> {
         let peer_id = match &cmd {
             Cmd::SyncWith(peer) => Some(peer.id.clone()),
+            Cmd::PushWith(peer) => Some(peer.id.clone()),
             Cmd::PairWith(_) => None,
         };
         let cmds = {
@@ -1035,6 +1036,25 @@ impl Session {
                     }
                     let _ = reply.send(result);
                 }
+                Job::ApplyMerged { peer, snapshot, reply } => {
+                    // The push-only round's answer: the peer merged this side's
+                    // snapshot, and this state is what both sides now agree on.
+                    // Adopting it runs the same write half an inbound round
+                    // runs; the merge itself is not repeated — the answer **is**
+                    // the merge's output. The shadow keys straight off the
+                    // agreement, so the next push starts from here.
+                    let before = self.sync_export().ok();
+                    let result = self.sync_apply_remote(&snapshot, &peer);
+                    if let Ok(merged) = &result {
+                        self.sync_store_shadow(&peer.id, merged).ok();
+                        self.sync_note_synced(&peer.id, true).ok();
+                    }
+                    let _ = reply.send(result.clone());
+                    changed |= match (&before, &result) {
+                        (Some(before), Ok(after)) => !same_snapshot_rows(before, after),
+                        (_, Err(_)) | (None, Ok(_)) => true,
+                    };
+                }
                 Job::InboundPair { device, ip, reply } => {
                     // Trust on the first exchange, the engine's own rule: both
                     // sides end up in each other's peer book.
@@ -1160,6 +1180,7 @@ impl Session {
             if let Some(s) = self.sync.as_mut() {
                 s.last_auto = now;
             }
+            let was_write = write_due;
             self.dirty_at.set(0);
             let (peers, _absent) = self.peers_due_for_a_round();
             let retry_after = self
@@ -1174,7 +1195,17 @@ impl Session {
             if !peers.is_empty() {
                 for mut p in peers {
                     mark_outbound(&mut p);
-                    self.sync_send(Cmd::SyncWith(p)).ok();
+                    // A settled write pushes only: the peer merges this side's
+                    // snapshot and answers the agreement, and this side adopts
+                    // it — one request, one merge on each end. The pull half of
+                    // the round is the reconciliation's business (`SyncWith`,
+                    // once a minute), where exporting the peer's whole library
+                    // buys the changes this side has not seen.
+                    if was_write {
+                        self.sync_send(Cmd::PushWith(p)).ok();
+                    } else {
+                        self.sync_send(Cmd::SyncWith(p)).ok();
+                    }
                 }
             }
         }
