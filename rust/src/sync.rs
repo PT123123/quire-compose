@@ -54,7 +54,9 @@ use quire_core::core::organizer::{ListId, OrganizerCatalog, TaskId};
 use quire_core::core::persistence::Repository;
 use quire_core::core::types::Attachment;
 use quire_core::core::Change;
-use quire_core::services::sync::engine::{Cmd, DeviceInfo, Engine, Job, LogLine, PeerRecord};
+use quire_core::services::sync::engine::{
+    one_address_one_row, Cmd, DeviceInfo, Engine, Job, LogLine, PeerRecord,
+};
 use quire_core::services::sync::merge::{merge, MergeCtx};
 use quire_core::services::sync::model::{
     SAttachment, SBlock, SNote, SPage, STask, STaskList, SyncSnapshot,
@@ -778,8 +780,8 @@ impl Session {
         (targets, absent)
     }
 
-    /// The peers the 刷新 button dials: every device the book holds an address
-    /// for.
+    /// The peers the 刷新 button dials: one row per address the book holds,
+    /// freshest first.
     ///
     /// The press is the user's will, stated; the sixty-second announcing window
     /// is the timer's caution, not the reader's. A device whose beats are
@@ -788,9 +790,15 @@ impl Session {
     /// `last_seen` gone stale, and a 刷新 that answered 「暂时没有发现可同步的设备」
     /// to that would be the one failure no amount of discovery work could reach.
     /// So the manual round dials the address and lets the round itself say
-    /// whether anything answered; a device that is truly gone costs one timeout
-    /// in the worker, which is the price of the ones that are there answering at
-    /// all.
+    /// whether anything answered.
+    ///
+    /// But a book holds *generations* per address — every reinstall of a
+    /// desktop minted a new id, all pointing at the same machine — so the list
+    /// goes through [`one_address_one_row`] before it goes to the worker:
+    /// one dial per address, the alive device first, the dead addresses
+    /// grinding their two-second timeouts at the back of the line. That
+    /// collapse is what keeps the round the user pressed for in the first
+    /// seconds instead of behind a wall of ghosts.
     ///
     /// This is deliberately a *different* list from the timer's
     /// ([`Session::peers_due_for_a_round`]), not a wider window on the same one:
@@ -798,10 +806,12 @@ impl Session {
     /// doc comment instead of inheriting the other's.
     pub(crate) fn peers_with_an_address(&self) -> Vec<PeerRecord> {
         let me = self.sync_self_info().id;
-        self.sync_peers()
+        let peers: Vec<PeerRecord> = self
+            .sync_peers()
             .into_iter()
             .filter(|p| p.id != me && !p.ip.is_empty())
-            .collect()
+            .collect();
+        one_address_one_row(peers)
     }
 
     pub(crate) fn sync_now_all(&mut self) -> Result<(), String> {
@@ -1703,9 +1713,31 @@ mod tests {
         // laptop is dialled and costs the worker one timeout; leaving it out
         // would be a press answered 「no devices」 while a filtered-beat device
         // with a perfectly good address sat in the same book.
+        //
+        // Generations collapse: a book that holds two rows of one machine (an
+        // older id beside the current one, same address) dials that machine
+        // once — the freshest row — because every extra ghost is a handshake
+        // the worker grinds through while the alive device waits.
+        session
+            .sync_note_device(
+                "dev-gone-old",
+                "Laptop",
+                "windows",
+                "192.168.1.7",
+                5878,
+                Some(true),
+            )
+            .expect("record the older generation");
+        let mut peers = session.sync_peers();
+        for p in peers.iter_mut() {
+            if p.id == "dev-gone-old" {
+                p.last_seen = now.saturating_sub(RECENT_ENOUGH_SECS + 600);
+            }
+        }
+        session.sync_set_peers(&peers).expect("write the book back");
+
         let manual_peers = session.peers_with_an_address();
-        let manual: Vec<&str> =
-            manual_peers.iter().map(|p| p.id.as_str()).collect();
+        let manual: Vec<&str> = manual_peers.iter().map(|p| p.id.as_str()).collect();
         assert!(
             manual.contains(&"dev-gone"),
             "the manual round dials the address, stale or not: {manual:?}"
@@ -1713,6 +1745,15 @@ mod tests {
         assert!(
             manual.contains(&"dev-heard"),
             "and the ordinary rows travel with it: {manual:?}"
+        );
+        assert!(
+            !manual.contains(&"dev-gone-old"),
+            "one address, one row — the freshest generation: {manual:?}"
+        );
+        assert_eq!(
+            manual.first(),
+            Some(&"dev-heard"),
+            "the device that is alive leads the round: {manual:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
