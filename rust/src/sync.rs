@@ -88,10 +88,18 @@ const DEFAULT_INTERVAL: u64 = 60;
 pub const AGGRESSIVE_INTERVAL: u64 = 10;
 /// How many log lines are kept. Newest last.
 const LOG_CAP: usize = 50;
-/// How soon after a content write the timer may push it ahead of its window.
-/// Two seconds, so a burst of keystrokes settles before the round goes — every
-/// keystroke refreshes `dirty_at`, which makes this the typing debounce too.
-const WRITE_KICK_SECS: u64 = 2;
+/// How soon after a content write the push goes. One second: a burst of
+/// keystrokes settles before the round goes — every keystroke refreshes
+/// `dirty_at`, which makes this the typing debounce too — and one second is
+/// the whole of "实时": the change leaves this device before the reader has
+/// picked up the other one.
+const WRITE_KICK_SECS: u64 = 1;
+/// The backstop cadence. Real-time pushes cover the change that just
+/// happened; this slower clock covers everything else a push can miss — a
+/// peer that was frozen when the change fired, a cooled-down failure, drift
+/// nobody noticed. The user-chosen interval this used to be is gone: the
+/// settings page names the modes now, and this number is not one of them.
+const RECONCILE_SECS: u64 = 60;
 /// A device is auto-synced while its announcement is recent. The announcer
 /// speaks every 4 s, so this leaves room for a missed beat or two — and a peer
 /// that stopped announcing is a peer whose server stopped too, which is the
@@ -1131,11 +1139,12 @@ impl Session {
             }
         }
 
-        // The auto-sync timer: on, idle, and the interval has passed — or a
-        // fresh content write is waiting, which goes inside
-        // [`WRITE_KICK_SECS`] rather than sitting out the rest of the window.
+        // The auto-sync clock: a fresh content write is pushed inside
+        // [`WRITE_KICK_SECS`] of the last keystroke — that IS the real-time
+        // promise — and otherwise one reconciliation round per
+        // [`RECONCILE_SECS`] catches what a push missed (a peer that was
+        // frozen when the change fired, a cooled-down failure, drift).
         let auto = self.sync_auto();
-        let interval = self.sync_effective_interval();
         let now = quire_core::services::sync::engine::now_unix();
         let dirty = self.dirty_at.get();
         let write_due = dirty > 0 && now.saturating_sub(dirty) >= WRITE_KICK_SECS;
@@ -1143,7 +1152,7 @@ impl Session {
             Some(s) => {
                 auto && !s.busy
                     && s.running()
-                    && (now.saturating_sub(s.last_auto) >= interval || write_due)
+                    && (write_due || now.saturating_sub(s.last_auto) >= RECONCILE_SECS)
             }
             None => false,
         };
@@ -1184,6 +1193,14 @@ impl Session {
             .collect();
         if let Some(sync) = self.sync.as_mut() {
             if sync.visible_online != online {
+                // A peer that just came online — the tablet woken up, the
+                // desktop reopened — missed every push this side made while
+                // it was gone. Its own return-to-foreground kick usually
+                // covers the pull; this covers the push this side owed it,
+                // now, rather than after the next reconciliation minute.
+                if online.iter().any(|id| !sync.visible_online.contains(id)) {
+                    sync.last_auto = 0;
+                }
                 sync.visible_online = online;
                 changed = true;
             }
@@ -1939,6 +1956,53 @@ mod tests {
         let back = session.sync_export().expect("re-export");
         assert!(back.attachments.is_empty(), "no attachment landed");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A content write pushes inside the kick window — no interval decides
+    /// when the reader sees it.**
+    ///
+    /// The real-time promise rests on this branch: `dirty_at` older than
+    /// [`WRITE_KICK_SECS`] fires a round even when nothing else is due, and a
+    /// pump with nothing new and the reconciliation minute not reached fires
+    /// nothing. The engine here is the real one, so the round really is
+    /// queued against a peer whose address goes nowhere — the assertion is
+    /// the *queue*, not the wire.
+    #[test]
+    fn a_fresh_write_pushes_inside_the_kick_window() {
+        let dir = scratch("write-kick");
+        let mut session = Session::open(dir.to_str().unwrap()).expect("open");
+        session.sync_ensure().expect("engine starts");
+        session
+            .sync_note_device("dev-heard", "Tablet", "android", "192.168.1.8", 5878, Some(true))
+            .expect("record the peer");
+
+        // Nothing due: the write is fresh (inside the kick window) and the
+        // reconciliation minute has not run — the pump queues no round.
+        let now = quire_core::services::sync::engine::now_unix();
+        session.sync.as_mut().unwrap().last_auto = now;
+        session.dirty_at.set(now.saturating_sub(WRITE_KICK_SECS / 2));
+        session.sync_pump();
+        assert!(
+            session.sync.as_ref().unwrap().pending_syncs.is_empty(),
+            "a write inside the debounce window waits for the next keystroke to settle"
+        );
+
+        // The write has settled: the round goes now, the stamp is cleared, and
+        // the peer whose beats are fresh is who it dials.
+        session.dirty_at.set(now.saturating_sub(WRITE_KICK_SECS + 1));
+        session.sync_pump();
+        let sync = session.sync.as_ref().unwrap();
+        assert!(
+            sync.pending_syncs.contains("dev-heard"),
+            "a settled write pushes immediately: {:?}",
+            sync.pending_syncs
+        );
+        assert_eq!(
+            session.dirty_at.get(),
+            0,
+            "the stamp is consumed by the round it started"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

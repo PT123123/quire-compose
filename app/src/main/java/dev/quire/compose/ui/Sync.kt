@@ -72,11 +72,11 @@ import dev.quire.compose.bridge.SyncState
  * the engine on the first request, so nothing listens and no threads exist until
  * this screen has been shown; that is also why the banner says what it says.
  *
- * The badge on each row, the pairing verbs and the interval presets are the
- * reference app's; the protocol underneath is `quire-core`'s own, which is
- * smaller than that app's (no cloud sync, no pairing codes, no per-device
- * statistics), so this page is that app's page narrowed to what this shell can
- * actually do — and it says so at the bottom rather than pretending.
+ * The badge on each row and the pairing verbs are the reference app's; the
+ * protocol underneath is `quire-core`'s own, which is smaller than that app's
+ * (no cloud sync, no pairing codes, no per-device statistics), so this page is
+ * that app's page narrowed to what this shell can actually do — and it says so
+ * at the bottom rather than pretending.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -506,7 +506,7 @@ private fun SyncBadge(label: String, tint: androidx.compose.ui.graphics.Color) {
     )
 }
 
-/** 设置: the timer, and what this device is called on the wire. */
+/** 设置: the mode, and what this device is called on the wire. */
 @Composable
 private fun SyncSettings(sync: SyncState, name: String, onName: (String) -> Unit, vm: QuireViewModel) {
     val colors = LocalQuireColors.current
@@ -516,22 +516,18 @@ private fun SyncSettings(sync: SyncState, name: String, onName: (String) -> Unit
     ) {
         SyncSection("设置")
 
-        Text("自动同步", style = QuireType.caption, color = colors.textMuted)
+        Text("同步模式", style = QuireType.caption, color = colors.textMuted)
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
-            // The presets are what to *ask for*; the line under them says what
-            // the timer is actually doing, which on Wi-Fi is a faster number
-            // than any of these (ADR-0032). Without that line a chip reading
-            // 「30 分」 over a 10-second timer is the page contradicting itself.
-            for ((label, seconds) in listOf("10 秒" to 10L, "1 分" to 60L, "5 分" to 300L, "30 分" to 1800L)) {
-                SyncChoice(
-                    label = label,
-                    selected = sync.auto && sync.interval == seconds,
-                    onClick = {
-                        vm.syncSetInterval(seconds)
-                        vm.syncSetAuto(true)
-                    },
-                )
-            }
+            // Two modes, not a ladder of intervals: real-time pushes the change
+            // the second typing settles and lets a one-minute reconciliation
+            // catch what a push missed — the old presets named a timer that no
+            // longer exists, and a chip reading 「30 分」 over a 1-second push
+            // would be the page contradicting itself.
+            SyncChoice(
+                label = "实时",
+                selected = sync.auto,
+                onClick = { vm.syncSetAuto(true) },
+            )
             SyncChoice(
                 label = "仅手动",
                 selected = !sync.auto,
@@ -539,18 +535,9 @@ private fun SyncSettings(sync: SyncState, name: String, onName: (String) -> Unit
             )
         }
 
-        // What the timer is doing, not what was asked for. On Wi-Fi the answer
-        // is the desktop's 10 秒 and the chips above are a ceiling rather than
-        // the number in force; off Wi-Fi it is the chosen interval, and the
-        // reason it is not the aggressive one is the sentence's whole job.
-        val showingInterval = sync.effectiveInterval != sync.interval
-        if (sync.auto && (showingInterval || !sync.onWifi)) {
+        if (sync.auto) {
             Text(
-                text = if (sync.onWifi) {
-                    "已在 Wi-Fi 下，实际每 ${sync.effectiveInterval} 秒同步一次"
-                } else {
-                    "未连接 Wi-Fi，按所选间隔每 ${sync.effectiveInterval} 秒同步一次"
-                },
+                text = "改动后即时推送 · 后台每 60 秒对账一次",
                 style = QuireType.caption,
                 color = colors.textMuted,
             )
