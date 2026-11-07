@@ -736,14 +736,10 @@ impl Session {
         self.sync_send(Cmd::SyncWith(peer))
     }
 
-    /// A round with every device still on the network — the 刷新 button in
-    /// 收件箱 and 任务.
+    /// The peers the auto-sync timer dials: the ones still announcing.
     ///
-    /// The same list the auto-sync timer dials, on purpose: a hand-started round
-    /// and a background one that disagree about who is reachable is how a user
-    /// presses 刷新 and watches one of their devices quietly sit it out. Three
-    /// things have to hold for a peer to be a target, and each is a way a round
-    /// would otherwise fail rather than be skipped:
+    /// Three things have to hold for a peer to be a target, and each is a way a
+    /// background round would fail rather than be skipped:
     ///
     /// * not this device — a record is its own peer in some tables, and dialling
     ///   yourself is a round that times out.
@@ -757,9 +753,9 @@ impl Session {
     /// asking again whether it is trusted asks the same question twice.
     ///
     /// Returns the targets and, separately, the peers that were left out by
-    /// name. Offline entries are normal in a persisted peer book: the timer
-    /// drops them silently, and a manual pull should do the same rather than
-    /// turning every absent device into a page-wide error.
+    /// name. The timer drops them silently — nobody is waiting on a background
+    /// tick. The 刷新 button asks a different question with a different answer:
+    /// [`Session::peers_with_an_address`].
     pub(crate) fn peers_due_for_a_round(&self) -> (Vec<PeerRecord>, Vec<String>) {
         let now = quire_core::services::sync::engine::now_unix();
         let me = self.sync_self_info().id;
@@ -782,9 +778,35 @@ impl Session {
         (targets, absent)
     }
 
+    /// The peers the 刷新 button dials: every device the book holds an address
+    /// for.
+    ///
+    /// The press is the user's will, stated; the sixty-second announcing window
+    /// is the timer's caution, not the reader's. A device whose beats are
+    /// filtered — the case the multicast lock and the unicast hello each mend,
+    /// and neither perfectly — can sit with a perfectly good address and a
+    /// `last_seen` gone stale, and a 刷新 that answered 「暂时没有发现可同步的设备」
+    /// to that would be the one failure no amount of discovery work could reach.
+    /// So the manual round dials the address and lets the round itself say
+    /// whether anything answered; a device that is truly gone costs one timeout
+    /// in the worker, which is the price of the ones that are there answering at
+    /// all.
+    ///
+    /// This is deliberately a *different* list from the timer's
+    /// ([`Session::peers_due_for_a_round`]), not a wider window on the same one:
+    /// the two answers disagree on purpose, and each keeps its reason in its own
+    /// doc comment instead of inheriting the other's.
+    pub(crate) fn peers_with_an_address(&self) -> Vec<PeerRecord> {
+        let me = self.sync_self_info().id;
+        self.sync_peers()
+            .into_iter()
+            .filter(|p| p.id != me && !p.ip.is_empty())
+            .collect()
+    }
+
     pub(crate) fn sync_now_all(&mut self) -> Result<(), String> {
         self.sync_ensure()?;
-        let (targets, _absent) = self.peers_due_for_a_round();
+        let targets = self.peers_with_an_address();
         if targets.is_empty() {
             if let Some(sync) = self.sync.as_mut() {
                 sync.status = "暂时没有发现可同步的设备".to_string();
@@ -1674,6 +1696,23 @@ mod tests {
             absent,
             vec!["Laptop".to_string()],
             "and it is named: {absent:?}"
+        );
+
+        // The manual half is a different question: the 刷新 press is the user's
+        // will, and the address in the book is everything it needs. The departed
+        // laptop is dialled and costs the worker one timeout; leaving it out
+        // would be a press answered 「no devices」 while a filtered-beat device
+        // with a perfectly good address sat in the same book.
+        let manual_peers = session.peers_with_an_address();
+        let manual: Vec<&str> =
+            manual_peers.iter().map(|p| p.id.as_str()).collect();
+        assert!(
+            manual.contains(&"dev-gone"),
+            "the manual round dials the address, stale or not: {manual:?}"
+        );
+        assert!(
+            manual.contains(&"dev-heard"),
+            "and the ordinary rows travel with it: {manual:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

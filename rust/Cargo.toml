@@ -38,7 +38,14 @@ crate-type = ["cdylib", "rlib"]
 # still syncs with this one. A device that had already lost rows to an empty peer
 # is not repaired by it: the rows are gone, and the backups are the only place
 # they are.
-quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "c40ea56" }
+#
+# `1d50c91` re-arms discovery: every heard beat is answered with a unicast
+# hello (POST /sync/hello — TCP, the channel no Wi-Fi driver filters), the
+# beat itself now travels a multicast group (224.0.0.178, inside the /24 some
+# Android devices insist on) beside the broadcast, and the request reader is
+# bounded line by line. Both shells pin this rev together, so a phone and a
+# desktop hear each other even when one side's broadcasts are filtered.
+quire-core = { git = "https://github.com/PT123123/quire-core.git", rev = "1d50c910e38008ca1b7edaf8e2a88819b6028b9a" }
 jni = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

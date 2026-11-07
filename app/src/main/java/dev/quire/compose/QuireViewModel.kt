@@ -1047,6 +1047,10 @@ class QuireViewModel(application: Application) : AndroidViewModel(application) {
     fun syncStart(kick: Boolean = false) = act {
         val context = getApplication<Application>()
         Network.bindProcessToLanWifi(context)
+        // The listener's ears: without the lock the driver drops every
+        // broadcast/multicast beat, and two Quire devices on the same Wi-Fi
+        // never hear each other. Taken once; held for the process's run.
+        Network.acquireMulticastLock(context)
         bridge.syncTransport(Network.isOnWifi(context), kick)
         bridge.syncOpen()
     }

@@ -5,11 +5,40 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 
 /** LAN transport selection and a standing subscription to network changes. */
 object Network {
+
+    /**
+     * The Wi-Fi driver filters incoming broadcast and multicast packets to
+     * save power, and it does so per-process: without this lock the sync
+     * listener binds its UDP port and then hears nothing — two phones on the
+     * same Wi-Fi would both announce into the void and never meet. Acquiring
+     * it is what LocalSend-class apps do before they can see each other at
+     * all, so discovery does the same: held for the whole process run, taken
+     * once (reference-counted off, so repeated calls are free), and released
+     * by the system when the process dies.
+     */
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    /**
+     * Take the multicast lock so discovery's listener receives what the LAN
+     * sends. Safe to call on every sync start; only the first takes a lock.
+     */
+    @Suppress("DEPRECATION") // WifiManager is the only door to a MulticastLock.
+    fun acquireMulticastLock(context: Context) {
+        if (multicastLock?.isHeld == true) return
+        val wifi =
+            context.applicationContext.getSystemService(WifiManager::class.java) ?: return
+        val lock = wifi.createMulticastLock("quire-sync-discovery").apply {
+            setReferenceCounted(false)
+        }
+        lock.acquire()
+        multicastLock = lock
+    }
 
     /**
      * Whether a physical Wi-Fi network is available for LAN sync. The default
