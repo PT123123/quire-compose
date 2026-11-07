@@ -18,3 +18,4 @@ rust/target/
 
 # scratch
 .scratch/
+.commandcode/
