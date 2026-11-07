@@ -1182,7 +1182,16 @@ impl Session {
             }
             let was_write = write_due;
             self.dirty_at.set(0);
-            let (peers, _absent) = self.peers_due_for_a_round();
+            // A settled write goes to every address the book holds — the push
+            // this side owes the peer does not depend on the peer having spoken
+            // recently, and a filtered broadcast leaves the address fresh in the
+            // book while the device sits right there. The reconciliation keeps
+            // the announcing window.
+            let peers = if was_write {
+                self.peers_with_an_address()
+            } else {
+                self.peers_due_for_a_round().0
+            };
             let retry_after = self
                 .sync
                 .as_ref()
